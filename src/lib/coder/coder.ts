@@ -140,6 +140,18 @@ export function llmStream(viz: ForwardViz, vocab: string[]): CodeStream {
   const [T, V] = viz.logits.shape;
   const data = viz.logits.data;
   const stream: CodeStream = [];
+
+  // The first token has no left context, so the model can't predict it — code it
+  // under a uniform prior (the standard choice without a BOS token). It costs a
+  // flat log2(V) bits no matter how trained the model is. Every later token uses
+  // the model's own next-token distribution, so all sources code the full string.
+  const t0 = viz.tokenIds[0];
+  if (t0 !== undefined) {
+    const uniform: CodeDistEntry[] = [];
+    for (let id = 0; id < V; id++) uniform.push({ id, label: vocab[id], p: 1 / V });
+    stream.push({ label: vocab[t0], dist: uniform, chosenIndex: t0 });
+  }
+
   for (let i = 0; i < T - 1; i++) {
     const probs = softmaxVec(data.subarray(i * V, (i + 1) * V));
     const dist: CodeDistEntry[] = [];
