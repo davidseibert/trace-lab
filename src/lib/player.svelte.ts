@@ -5,10 +5,14 @@
  * scrubbing backward, and slow-motion are all index manipulation.
  */
 
-import type { Step } from './mdl/types';
-
-export class Player<Model, Move> {
-  steps = $state<Step<Model, Move>[]>([]);
+/**
+ * Generic over the step element type `S`: the player only ever indexes into
+ * `steps[]`, so it neither knows nor cares what a step contains. The MDL lens
+ * loads `Step<GrammarModel, DigramMove>[]`; the transformer lens loads
+ * `LlmStep[]`. Same playback, two algorithms.
+ */
+export class Player<S> {
+  steps = $state<S[]>([]);
   index = $state(0);
   playing = $state(false);
   /** Steps per second when playing. */
@@ -21,7 +25,7 @@ export class Player<Model, Move> {
   atEnd = $derived(this.index >= this.steps.length - 1);
   atStart = $derived(this.index <= 0);
 
-  load(steps: Step<Model, Move>[]) {
+  load(steps: S[]) {
     this.pause();
     this.steps = steps;
     this.index = 0;

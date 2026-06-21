@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Player } from '../lib/player.svelte';
 
-  let { player }: { player: Player<unknown, unknown> } = $props();
+  let { player }: { player: Player<unknown> } = $props();
 
   const speeds = [0.5, 1, 1.5, 3, 6];
 </script>
