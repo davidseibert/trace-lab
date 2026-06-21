@@ -3,8 +3,9 @@
   import MorphApp from './components/MorphApp.svelte';
   import MorfessorApp from './components/MorfessorApp.svelte';
   import LlmApp from './components/LlmApp.svelte';
+  import GraphApp from './components/GraphApp.svelte';
 
-  type Lens = 'grammar' | 'morph' | 'morfessor' | 'llm';
+  type Lens = 'grammar' | 'morph' | 'morfessor' | 'llm' | 'graph';
   let lens = $state<Lens>('grammar');
 </script>
 
@@ -18,6 +19,7 @@
       <button class:active={lens === 'morph'} onclick={() => (lens = 'morph')}>Morph·merge</button>
       <button class:active={lens === 'morfessor'} onclick={() => (lens = 'morfessor')}>Morph·split</button>
       <button class:active={lens === 'llm'} onclick={() => (lens = 'llm')}>Mini-GPT</button>
+      <button class:active={lens === 'graph'} onclick={() => (lens = 'graph')}>Graph·SUBDUE</button>
     </div>
   </div>
 {/snippet}
@@ -29,8 +31,10 @@
     <MorphApp {brand} />
   {:else if lens === 'morfessor'}
     <MorfessorApp {brand} />
-  {:else}
+  {:else if lens === 'llm'}
     <LlmApp {brand} />
+  {:else}
+    <GraphApp {brand} />
   {/if}
 </div>
 

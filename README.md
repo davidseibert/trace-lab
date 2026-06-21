@@ -43,12 +43,14 @@ function of the current step. So you get a **debugger**:
 | `src/lib/mdl/engine.ts` | `trace()` — greedy search → immutable snapshot list |
 | `src/lib/string/grammar.ts` | String lens: digram grammar, uniform + Shannon costs |
 | `src/lib/morphology/morphology.ts` | Morphology lens: word-bounded, frequency-weighted morph lexicon |
+| `src/lib/graph/graph.ts` | Graph lens: SUBDUE substructure compression (`canon.ts`, `match.ts`, `layout.ts`) |
 | `src/lib/player.svelte.ts` | Playback (index into the trace) |
 | `src/components/*` | CostPanel, CostChart, CandidatesTable, Controls (shared) + per-lens views |
 
 A new domain = implement one `MdlProblem` adapter; the engine, player, and most
-of the UI come for free. Three lenses share this spine today — grammar,
-morphology, and a mini-GPT training trace.
+of the UI come for free. Lenses sharing this spine today: grammar, morphology
+(merge), a SUBDUE graph lens — and, with their own bespoke loops, the Morfessor
+split lens and a mini-GPT training trace.
 
 ## Morphology lens
 
@@ -97,9 +99,51 @@ Words are short, so each re-analysis enumerates every segmentation and scores it
 the exact cost — correct by construction, no approximation (the classic recursive
 `O(n²)` splitter is just an optimization we don't need at this scale).
 
+## Graph lens (SUBDUE)
+
+Feed it a **directed, labeled graph** as an edge list (`a:Person b:Movie WATCHED`).
+This is the grammar lens lifted from a sequence to a graph: instead of naming a
+recurring *digram*, it discovers a recurring connected *subgraph* — a triangle, a
+ring, a motif — names it, and collapses every non-overlapping (vertex-disjoint)
+instance into a single composite node. The folded pattern lives once in the
+**substructure dictionary** (that is `L(M)`); the graph that remains is `L(D|M)`.
+Adding a substructure grows the dictionary but shrinks the graph — the same MDL
+trough, now over a structurally richer object. This is SUBDUE.
+
+A composite node carries a substructure symbol, so a later substructure can
+contain an earlier one: the dictionary composes hierarchically, exactly as
+grammar builds `"the"` from `(t,h)+e`. The candidates table makes the lesson
+sharper than in the string lens — a **large, rarer** substructure can out-compress
+a **small, frequent** one, so MDL's pick and the most-frequent pick diverge more
+often. Same engine, player, cost panel, candidate table, and evolution chart as
+the other lenses; only the data shape (nodes/edges) and the move (collapse a
+subgraph) differ.
+
+Notably, this lens needs **no custom engine** — unlike Morfessor and the Mini-GPT
+lens. It implements the same `MdlProblem` adapter the grammar lens does and rides
+the generic `trace()` runner unchanged; the SUBDUE beam (canonical labeling +
+connected-subgraph enumeration + vertex-disjoint instance selection) all happens
+inside `candidates()`. That is the strongest evidence yet for the README's thesis:
+*a new domain = one adapter.*
+
+Matching is on **labels *and* structure**, not shape alone. Two samples make this
+concrete: a **dependency-grammar** graph where the noun phrase (`N←det D`,
+`N←amod A`) emerges as a substructure and the clause (`V` with subject- and
+object-NPs) then composes on top of it — linguistic constituency falling out of
+compression — and a **kinship** graph where a two-son family and a two-daughter
+family are the *same shape* but stay *distinct* substructures because sex (M/F) is
+part of the match. The all-`o` triangle samples, by contrast, are the graph
+equivalent of compressing `aaaaaa`: pure structure, labels carrying nothing.
+
+It is deliberately **toy-scale** (≤ ~40 nodes): subgraph isomorphism is
+exponential, so pattern size and the candidate beam are bounded, and an induced
+subgraph (a chunk you literally cut out) defines an instance. Node positions come
+from a seeded, deterministic force layout computed once over the base graph, with
+composites placed at the centroid of their constituents — so nothing jumps as you
+scrub.
+
 ## Roadmap
 
-- **Graph domain** — SUBDUE-style substructure compression.
 - **Speed (only if real vocabularies are loaded)** — the merge lens scores
   candidates by a full `cost(apply(...))` recompute; both code modes admit an exact
   `O(1)` delta (`L = T·log₂T − Σ f·log₂f` localizes a merge to a few frequencies).

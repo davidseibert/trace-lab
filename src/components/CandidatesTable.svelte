@@ -1,29 +1,28 @@
-<script lang="ts">
+<script lang="ts" generics="M">
   import type { CostBreakdown, ScoredMove } from '../lib/mdl/types';
   import { fmt, fmtDelta } from '../lib/mdl/format';
 
-  // Both lenses' moves are an adjacent symbol pair (a,b): grammar's DigramMove
-  // and morphology's MergeMove. We only need that structural shape here.
-  type PairMove = { a: number; b: number };
-
+  // Move-agnostic: every lens's scored move carries a `× count` and an `expands`
+  // string in `extra`, which is all this table needs. Grammar/morphology pass a
+  // digram move, the graph lens a substructure move — the shape never matters
+  // here. Identity is by object reference: `chosen` and `mostFrequent` are always
+  // members of `candidates` (the engine reuses the same scored objects).
   let {
     candidates,
     baseline,
     chosen,
     limit = 40
   }: {
-    candidates: ScoredMove<PairMove>[];
+    candidates: ScoredMove<M>[];
     baseline: CostBreakdown;
-    chosen: ScoredMove<PairMove> | null;
+    chosen: ScoredMove<M> | null;
     limit?: number;
   } = $props();
 
-  const sameMove = (m: PairMove | undefined, n: PairMove | undefined) =>
-    !!m && !!n && m.a === n.a && m.b === n.b;
-
-  // The candidate a frequency-greedy compressor (e.g. plain RePair) would pick.
+  // The candidate a frequency-greedy compressor (e.g. plain RePair) would pick:
+  // the most occurrences, ignoring how much each occurrence actually saves.
   const mostFrequent = $derived.by(() => {
-    let best: ScoredMove<PairMove> | null = null;
+    let best: ScoredMove<M> | null = null;
     let bestN = -1;
     for (const c of candidates) {
       const n = Number(c.extra['×'] ?? 0);
@@ -37,7 +36,7 @@
 
 <div class="cands">
   {#if candidates.length === 0}
-    <p class="muted empty">No digram repeats ≥ 2×. Nothing left to compress — converged.</p>
+    <p class="muted empty">No repeated structure remains. Nothing left to compress — converged.</p>
   {:else}
     <div class="table scrollbar">
       <div class="row head">
@@ -49,8 +48,8 @@
         <span class="r">Δ total</span>
       </div>
       {#each shown as c}
-        {@const isChosen = sameMove(c.move, chosen?.move)}
-        {@const isFreq = sameMove(c.move, mostFrequent?.move)}
+        {@const isChosen = c === chosen}
+        {@const isFreq = c === mostFrequent}
         <div class="row" class:chosen={isChosen}>
           <span class="mv mono">
             {#if isChosen}<span class="tag pick">PICK</span>{/if}
@@ -76,7 +75,7 @@
         <div class="more faint">… {candidates.length - limit} more not shown</div>
       {/if}
     </div>
-    {#if mostFrequent && chosen && !sameMove(mostFrequent.move, chosen.move)}
+    {#if mostFrequent && chosen && mostFrequent !== chosen}
       <p class="insight">
         💡 MDL picked <span class="mono" style="color:var(--chosen)">{chosen.label}</span>
         (Δ {fmt(chosen.delta, 1)}), <em>not</em> the most frequent digram
