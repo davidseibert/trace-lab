@@ -1,13 +1,15 @@
 <script lang="ts">
-  import type { Step } from '../lib/mdl/types';
+  import type { CostBreakdown } from '../lib/mdl/types';
   import { fmt } from '../lib/mdl/format';
 
+  // Any lens whose steps carry a CostBreakdown can drive this chart (grammar,
+  // morphology merge, Morfessor split).
   let {
     steps,
     index,
     onSeek
   }: {
-    steps: Step<unknown, unknown>[];
+    steps: { cost: CostBreakdown }[];
     index: number;
     onSeek: (i: number) => void;
   } = $props();

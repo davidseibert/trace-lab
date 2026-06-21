@@ -1,9 +1,10 @@
 <script lang="ts">
   import GrammarApp from './components/GrammarApp.svelte';
   import MorphApp from './components/MorphApp.svelte';
+  import MorfessorApp from './components/MorfessorApp.svelte';
   import LlmApp from './components/LlmApp.svelte';
 
-  type Lens = 'grammar' | 'morph' | 'llm';
+  type Lens = 'grammar' | 'morph' | 'morfessor' | 'llm';
   let lens = $state<Lens>('grammar');
 </script>
 
@@ -14,7 +15,8 @@
     <span class="wordmark mono">trace<span class="dim">·lab</span></span>
     <div class="toggle-group lens-switch">
       <button class:active={lens === 'grammar'} onclick={() => (lens = 'grammar')}>MDL Grammar</button>
-      <button class:active={lens === 'morph'} onclick={() => (lens = 'morph')}>Morphology</button>
+      <button class:active={lens === 'morph'} onclick={() => (lens = 'morph')}>Morph·merge</button>
+      <button class:active={lens === 'morfessor'} onclick={() => (lens = 'morfessor')}>Morph·split</button>
       <button class:active={lens === 'llm'} onclick={() => (lens = 'llm')}>Mini-GPT</button>
     </div>
   </div>
@@ -25,6 +27,8 @@
     <GrammarApp {brand} />
   {:else if lens === 'morph'}
     <MorphApp {brand} />
+  {:else if lens === 'morfessor'}
+    <MorfessorApp {brand} />
   {:else}
     <LlmApp {brand} />
   {/if}

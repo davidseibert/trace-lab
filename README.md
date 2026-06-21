@@ -64,10 +64,44 @@ word-bounded counting differ.
 This is the *agglomerative* variant (RePair/BPE over a weighted word list). It is
 Morfessor in spirit — two-part MDL over a morph lexicon — but not in mechanism:
 canonical Morfessor Baseline starts from whole words and recursively splits,
-revisiting earlier cuts. That recursive-split engine is the next step.
+revisiting earlier cuts. That recursive-split engine is the **split** lens below.
+
+## Morphology — phase 2 (Morfessor split)
+
+The same word list, optimized from the **opposite extreme**. Every word starts as
+a single whole-word morph (lexicon huge, corpus tiny — one token per word); the
+algorithm then re-segments words to share structure, the mirror image of the
+merge lens. Watching both converge on the same data from opposite ends is the
+lesson.
+
+This lens needs a **different engine**, and the reason is instructive — it's the
+scaling caveat from the merge lens turned structural:
+
+- **The move is a re-segmentation, scored against live global counts.** Re-analysing
+  one word means pulling it out of the corpus and choosing the segmentation that
+  minimizes the *total* cost given every other word as-is. Because the corpus code
+  is `−log₂ p` over morph tokens, a word's best cut depends on the whole model — so
+  the engine maintains incremental morph counts (`remove`/`add`/`reanalyse`) rather
+  than recomputing a global cost per candidate.
+- **It loops in epochs, not a single argmin.** It sweeps the word list, re-analysing
+  each word, until a full pass changes nothing. Because "keep the current cut" is
+  always a candidate, every step is non-increasing, so the trace is a clean
+  descending staircase that still shows *re-analysis*: a word can flip its cut in a
+  later epoch because other words moved the counts beneath it. That breaks the merge
+  engine's "one global best move per step" invariant — hence a separate loop.
+- **What stays free:** the `Step[]` trace, `Player`, transport, panels, cost panel,
+  and evolution chart all apply unchanged. Only the search loop and the
+  count-maintenance differ.
+
+Words are short, so each re-analysis enumerates every segmentation and scores it by
+the exact cost — correct by construction, no approximation (the classic recursive
+`O(n²)` splitter is just an optimization we don't need at this scale).
 
 ## Roadmap
 
-- **Morphology phase 2** — recursive splitting + epoch revisiting (true Morfessor
-  Baseline), to escape the local optima pure agglomeration can't.
 - **Graph domain** — SUBDUE-style substructure compression.
+- **Speed (only if real vocabularies are loaded)** — the merge lens scores
+  candidates by a full `cost(apply(...))` recompute; both code modes admit an exact
+  `O(1)` delta (`L = T·log₂T − Σ f·log₂f` localizes a merge to a few frequencies).
+  Worth adding behind a dev-time equality assertion against `cost()`; unnecessary
+  for toy inputs.
