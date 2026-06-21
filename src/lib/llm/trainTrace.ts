@@ -19,7 +19,14 @@
  */
 
 import { mulberry32, randInt, type Rng } from './rng';
-import { MiniGPT, Adam, type ModelConfig, type ForwardViz } from './model';
+import {
+  MiniGPT,
+  Adam,
+  flattenParams,
+  loadParams,
+  type ModelConfig,
+  type ForwardViz
+} from './model';
 import { crossEntropyLoss, backward } from './tensor';
 import type { Dataset } from './datasets';
 
@@ -51,7 +58,20 @@ export interface TrainTraceOptions {
   seed?: number;
 }
 
-export function trainTrace(ds: Dataset, opts: TrainTraceOptions = {}): LlmStep[] {
+/**
+ * The full precomputed run: the visible step trace plus everything needed to
+ * replay an *arbitrary* input against the model as it stood at any step (the
+ * flat parameter snapshot per step). That's what powers the live query box.
+ */
+export interface TrainRun {
+  steps: LlmStep[];
+  cfg: ModelConfig;
+  vocab: string[];
+  /** weights[i] = flat parameters at step i (before the i-th update). */
+  weights: Float64Array[];
+}
+
+export function trainTrace(ds: Dataset, opts: TrainTraceOptions = {}): TrainRun {
   const steps = opts.steps ?? 300;
   const seed = opts.seed ?? 1;
   const rng: Rng = mulberry32(seed);
@@ -91,9 +111,14 @@ export function trainTrace(ds: Dataset, opts: TrainTraceOptions = {}): LlmStep[]
   };
 
   const out: LlmStep[] = [];
+  const weights: Float64Array[] = [];
 
   for (let i = 0; i < steps; i++) {
     const loss = meanLoss();
+
+    // Snapshot the weights AT this state, so the query box can replay any input
+    // against the model exactly as it stood at step i.
+    weights.push(flattenParams(model));
 
     // Probe forward LAST so `model.viz` reflects the probe, not the loss eval.
     model.forward(probeInput);
@@ -134,5 +159,20 @@ export function trainTrace(ds: Dataset, opts: TrainTraceOptions = {}): LlmStep[]
     optimizer.step();
   }
 
-  return out;
+  return { steps: out, cfg, vocab: ds.vocab, weights };
+}
+
+/**
+ * Build a reusable forward function over a finished run: given a step index and
+ * any token-id sequence, load that step's weights and return the forward-pass
+ * snapshot. One model instance is reused across calls (its random init is
+ * irrelevant — every parameter is overwritten by loadParams).
+ */
+export function makeForward(run: TrainRun): (stepIndex: number, tokenIds: number[]) => ForwardViz {
+  const model = new MiniGPT(run.cfg, mulberry32(1));
+  return (stepIndex, tokenIds) => {
+    loadParams(model, run.weights[stepIndex]);
+    model.forward(tokenIds);
+    return model.viz!;
+  };
 }

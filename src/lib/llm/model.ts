@@ -315,6 +315,30 @@ export class MiniGPT {
   }
 }
 
+/** Concatenate all parameter values into one flat buffer (params() order). */
+export function flattenParams(model: MiniGPT): Float64Array {
+  const ps = model.params();
+  let n = 0;
+  for (const p of ps) n += p.data.length;
+  const out = new Float64Array(n);
+  let o = 0;
+  for (const p of ps) {
+    out.set(p.data, o);
+    o += p.data.length;
+  }
+  return out;
+}
+
+/** Inverse of flattenParams: copy a flat buffer back into the model's params. */
+export function loadParams(model: MiniGPT, flat: Float64Array): void {
+  const ps = model.params();
+  let o = 0;
+  for (const p of ps) {
+    p.data.set(flat.subarray(o, o + p.data.length));
+    o += p.data.length;
+  }
+}
+
 /** Adam optimiser over a flat list of parameter tensors. */
 export class Adam {
   params: Tensor[];
