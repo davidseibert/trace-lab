@@ -43,7 +43,6 @@
 
 <div class="chart">
   <div class="chead">
-    <span class="panel-title">Description length over search</span>
     <div class="legend">
       <span class="li"><span class="swatch" style="background:var(--total)"></span>total</span>
       <span class="li"><span class="swatch" style="background:var(--model)"></span>L(M)</span>
@@ -74,7 +73,7 @@
 
 <style>
   .chart { display: flex; flex-direction: column; gap: 6px; height: 100%; min-height: 0; }
-  .chead { display: flex; justify-content: space-between; align-items: center; flex: 0 0 auto; }
+  .chead { display: flex; justify-content: flex-end; align-items: center; flex: 0 0 auto; }
   .legend { display: flex; gap: 12px; font-size: 11px; color: var(--muted); }
   .li { display: inline-flex; align-items: center; gap: 4px; }
   svg { width: 100%; flex: 1 1 auto; min-height: 90px; height: auto; cursor: crosshair; display: block; }

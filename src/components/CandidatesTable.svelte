@@ -33,11 +33,6 @@
 </script>
 
 <div class="cands">
-  <div class="chead">
-    <span class="panel-title">Candidate moves &nbsp;·&nbsp; ranked by Δ total bits</span>
-    <span class="muted mono">{candidates.length} candidate{candidates.length === 1 ? '' : 's'}</span>
-  </div>
-
   {#if candidates.length === 0}
     <p class="muted empty">No digram repeats ≥ 2×. Nothing left to compress — converged.</p>
   {:else}
@@ -91,7 +86,6 @@
 
 <style>
   .cands { display: flex; flex-direction: column; gap: 7px; min-height: 0; height: 100%; }
-  .chead { display: flex; justify-content: space-between; align-items: center; flex: 0 0 auto; }
   .empty { font-size: 12.5px; }
   .table { display: flex; flex-direction: column; overflow-y: auto; min-height: 0; flex: 1 1 auto; font-size: 12px; }
   .row {

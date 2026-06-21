@@ -14,6 +14,16 @@
   import CostChart from './components/CostChart.svelte';
   import CandidatesTable from './components/CandidatesTable.svelte';
   import Controls from './components/Controls.svelte';
+  import Panel from './components/Panel.svelte';
+  import PanelHost from './components/PanelHost.svelte';
+  import { PanelManager } from './lib/panels/panels.svelte';
+
+  const panels = new PanelManager('grammar', [
+    { id: 'grammar', title: 'Grammar' },
+    { id: 'cands', title: 'Candidate moves' },
+    { id: 'cost', title: 'Description length' },
+    { id: 'chart', title: 'Evolution' }
+  ]);
 
   const SAMPLES: Record<string, string> = {
     'the cat / the mat': 'the cat sat on the mat. the cat ate the rat. the rat sat.',
@@ -80,31 +90,43 @@
     </label>
 
     <span class="chars mono muted">{text.length}c</span>
+
+    {#if panels.isDirty}
+      <button class="ghost reset-layout" onclick={() => panels.reset()} title="Reset panel layout">⤢ reset</button>
+    {/if}
   </div>
 
   {#if cur}
-    <div class="body">
-      <section class="panel stream-panel">
-        <StreamView model={cur.model} chosen={cur.chosen} />
-      </section>
+    <PanelHost manager={panels}>
+      <div class="col col-left">
+        <Panel manager={panels} id="grammar" weight={1.15}>
+          {#snippet actions()}
+            <span class="mono">{cur.model.rules.length} rule{cur.model.rules.length === 1 ? '' : 's'}</span>
+          {/snippet}
+          <StreamView model={cur.model} chosen={cur.chosen} />
+        </Panel>
 
-      <section class="panel cands-panel">
-        <CandidatesTable candidates={cur.candidates} baseline={cur.cost} chosen={cur.chosen} />
-      </section>
+        <Panel manager={panels} id="cands" weight={0.85}>
+          {#snippet actions()}
+            <span class="mono">{cur.candidates.length} candidate{cur.candidates.length === 1 ? '' : 's'}</span>
+          {/snippet}
+          <CandidatesTable candidates={cur.candidates} baseline={cur.cost} chosen={cur.chosen} />
+        </Panel>
+      </div>
 
-      <aside class="side">
-        <section class="panel cost-panel">
-          <div class="panel-title row-title">
-            <span>Description length</span>
-            <span class="mono muted">step {player.index}</span>
-          </div>
+      <div class="col col-right">
+        <Panel manager={panels} id="cost" fit>
+          {#snippet actions()}
+            <span class="mono">step {player.index}</span>
+          {/snippet}
           <CostPanel cost={cur.cost} {reference} />
-        </section>
-        <section class="panel chart-panel">
+        </Panel>
+
+        <Panel manager={panels} id="chart" weight={1}>
           <CostChart steps={player.steps} index={player.index} onSeek={(i) => player.seek(i)} />
-        </section>
-      </aside>
-    </div>
+        </Panel>
+      </div>
+    </PanelHost>
 
     <div class="panel transport-panel">
       <Controls {player} />
@@ -124,10 +146,9 @@
     gap: 8px;
   }
 
-  .panel { display: flex; flex-direction: column; min-height: 0; }
-
   /* ---------- top bar ---------- */
   .topbar {
+    display: flex;
     flex: 0 0 auto;
     flex-direction: row;
     align-items: center;
@@ -146,25 +167,16 @@
   .cb { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); white-space: nowrap; cursor: pointer; }
   .cb input { accent-color: var(--model); }
   .chars { font-size: 11px; white-space: nowrap; }
+  .reset-layout { padding: 4px 9px; font-size: 11px; white-space: nowrap; }
 
-  /* ---------- body: fills the rest of the viewport ---------- */
-  .body {
-    flex: 1 1 auto;
-    min-height: 0;
-    display: grid;
-    grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1.15fr) minmax(0, 0.85fr);
-    gap: 8px;
-  }
-  .stream-panel { grid-column: 1; grid-row: 1; padding: 10px 12px; }
-  .cands-panel { grid-column: 1; grid-row: 2; padding: 10px 12px; }
-  .side { grid-column: 2; grid-row: 1 / 3; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-  .cost-panel { flex: 0 0 auto; padding: 10px 12px; }
-  .chart-panel { flex: 1 1 auto; min-height: 0; padding: 10px 12px; }
-  .row-title { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  /* ---------- body: two flex columns of stacked panels ---------- */
+  .col { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0; }
+  .col-left { flex: 1.45 1 0; }
+  .col-right { flex: 1 1 0; }
 
   /* ---------- transport ---------- */
   .transport-panel {
+    display: flex;
     flex: 0 0 auto;
     flex-direction: row;
     align-items: center;
@@ -178,9 +190,4 @@
     text-align: right;
   }
   .note.converged { color: var(--good); }
-
-  @media (max-width: 880px) {
-    .body { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr 1fr; }
-    .side { grid-column: 1; grid-row: 3; }
-  }
 </style>
