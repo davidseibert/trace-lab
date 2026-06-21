@@ -18,7 +18,7 @@ export class Player<S> {
   /** Steps per second when playing. */
   speed = $state(1.5);
 
-  #timer: ReturnType<typeof setInterval> | null = null;
+  #timer: ReturnType<typeof setTimeout> | null = null;
 
   current = $derived(this.steps[this.index]);
   count = $derived(this.steps.length);

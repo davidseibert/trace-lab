@@ -1,7 +1,10 @@
 <script lang="ts">
   import type { CostBreakdown, ScoredMove } from '../lib/mdl/types';
-  import type { DigramMove } from '../lib/string/grammar';
   import { fmt, fmtDelta } from '../lib/mdl/format';
+
+  // Both lenses' moves are an adjacent symbol pair (a,b): grammar's DigramMove
+  // and morphology's MergeMove. We only need that structural shape here.
+  type PairMove = { a: number; b: number };
 
   let {
     candidates,
@@ -9,18 +12,18 @@
     chosen,
     limit = 40
   }: {
-    candidates: ScoredMove<DigramMove>[];
+    candidates: ScoredMove<PairMove>[];
     baseline: CostBreakdown;
-    chosen: ScoredMove<DigramMove> | null;
+    chosen: ScoredMove<PairMove> | null;
     limit?: number;
   } = $props();
 
-  const sameMove = (m: DigramMove | undefined, n: DigramMove | undefined) =>
+  const sameMove = (m: PairMove | undefined, n: PairMove | undefined) =>
     !!m && !!n && m.a === n.a && m.b === n.b;
 
   // The candidate a frequency-greedy compressor (e.g. plain RePair) would pick.
   const mostFrequent = $derived.by(() => {
-    let best: ScoredMove<DigramMove> | null = null;
+    let best: ScoredMove<PairMove> | null = null;
     let bestN = -1;
     for (const c of candidates) {
       const n = Number(c.extra['×'] ?? 0);

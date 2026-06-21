@@ -1,6 +1,6 @@
 /**
- * Panel management — the shared chrome both lenses (MDL grammar, and the coming
- * transformer) sit inside. Deliberately thin for now: collapse/restore, a
+ * Panel management — the shared chrome every lens (MDL grammar, morphology, and
+ * the transformer) sits inside. Deliberately thin for now: collapse/restore, a
  * single "focus" (maximize) slot, and localStorage persistence. The heavier
  * JetBrains-style docking (drag, split, float, tab groups) comes later, once the
  * transformer panels tell us what the layout actually needs.
