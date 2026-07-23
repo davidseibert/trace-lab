@@ -31,12 +31,15 @@ Everything is wrapped in a `Makefile` (`make help` lists it):
 | `make smoke` | one-shot bits-ladder sanity check (`PROMPT="…"`, `MODEL=…` to override) |
 | `make build` / `make down` / `make clean` | build images / stop / also remove images |
 
-Model downloads are cached under `./data` (via `HF_HOME`), so you pay each
-download once. Two escape hatches: `ENGINE_DATA=../x-logit-lens/data make up`
-reuses an existing HF cache from that repo, and `WEB_PORT=5199 make up` remaps
-the web port when something else squats on 5180. The engine's host port must
-stay 5181 (the browser calls it directly) unless you also set
-`VITE_ENGINE_URL`.
+Model weights live in the **`hf-cache` named Docker volume**, shared with
+x-logit-lens (both compose files pin `name: hf-cache`, which opts out of
+compose's per-project prefixing) — so each model downloads once across both
+projects, and loads are fast because the volume lives inside the WSL2 VM.
+Never `down -v`: that deletes the shared cache. Inspect it with
+`docker run --rm -v hf-cache:/v alpine du -sh /v/hf`. One escape hatch:
+`WEB_PORT=5199 make up` remaps the web port when something else squats
+on 5180. The engine's host port must stay 5181 (the browser calls it
+directly) unless you also set `VITE_ENGINE_URL`.
 
 ## What it does (string grammar lens)
 
