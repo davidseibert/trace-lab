@@ -5,8 +5,9 @@
   import LlmApp from './components/LlmApp.svelte';
   import GraphApp from './components/GraphApp.svelte';
   import CoderApp from './components/CoderApp.svelte';
+  import LogitApp from './components/LogitApp.svelte';
 
-  type Lens = 'grammar' | 'morph' | 'morfessor' | 'llm' | 'graph' | 'coder';
+  type Lens = 'grammar' | 'morph' | 'morfessor' | 'llm' | 'graph' | 'coder' | 'logit';
   let lens = $state<Lens>('grammar');
 </script>
 
@@ -22,6 +23,7 @@
       <button class:active={lens === 'llm'} onclick={() => (lens = 'llm')}>Mini-GPT</button>
       <button class:active={lens === 'graph'} onclick={() => (lens = 'graph')}>Graph·SUBDUE</button>
       <button class:active={lens === 'coder'} onclick={() => (lens = 'coder')}>Coder</button>
+      <button class:active={lens === 'logit'} onclick={() => (lens = 'logit')}>Logit·real</button>
     </div>
   </div>
 {/snippet}
@@ -37,6 +39,8 @@
     <LlmApp {brand} />
   {:else if lens === 'graph'}
     <GraphApp {brand} />
+  {:else if lens === 'logit'}
+    <LogitApp {brand} />
   {:else}
     <CoderApp {brand} />
   {/if}

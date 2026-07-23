@@ -47,6 +47,7 @@ function of the current step. So you get a **debugger**:
 | `src/lib/coder/arithmetic.ts` | Coder lens: model-agnostic arithmetic encode/decode (`coder.ts` builds the streams) |
 | `src/lib/player.svelte.ts` | Playback (index into the trace) |
 | `src/components/*` | CostPanel, CostChart, CandidatesTable, Controls (shared) + per-lens views |
+| `engine/` | Python engine service (FastAPI + torch): real-model logit lens / J-lens over HF models |
 
 A new domain = implement one `MdlProblem` adapter; the engine, player, and most
 of the UI come for free. Lenses sharing this spine today: grammar, morphology
@@ -313,13 +314,57 @@ of the residual's norm lies in the row space of `∂logits/∂h` (centered, sinc
 softmax ignores uniform shifts). The remainder is blind directions: components
 that carry exactly zero bits about the next token, however large they are.
 
+## Logit·real lens (GPT-2 / Qwen)
+
+The mini-GPT lens's ladder, climbed by a **real model**. A small Python engine
+service (`engine/` — FastAPI + torch, adapted from `x-logit-lens`) runs the
+classic logit lens over any cached HF causal LM and reports, per layer, the
+**code length in bits** (`−log₂ p`) of the model's own next-token prediction —
+so "the prediction sharpens with depth" is the same falling curve, on the same
+axis, as every other lens. The transport scrubs through **depth** instead of
+training time: the same `Player`, pointed at rungs instead of steps.
+
+Start the engine, then open the `Logit·real` tab:
+
+```bash
+cd engine
+uv sync                                   # once; pulls torch (CUDA on win/linux)
+uv run uvicorn main:app --port 5181       # set HF_HOME first to reuse a model cache
+```
+
+Panels: the **lens grid** (rows = layers deepest-on-top, columns = positions,
+each cell a layer's top-1 guess shaded by confidence — the x-logit-lens TUI,
+reborn), the **depth chart** (bits per rung, classic vs J-lens, uniform log₂V
+reference), and the **rung readout** (top-k under both decodes at the selected
+cell).
+
+The **J-lens** here mirrors the mini-GPT one *semantically*, but where the toy
+model affords an exact Jacobian, the real model gets one **forward-mode AD pass
+(JVP) per rung**: seed block *l*'s input with tangent = its own last-position
+content, read the tangent back off the pre-norm final residual — that is `J·h`
+with `J = ∂(remaining blocks)/∂rung` — then decode it through the *real* final
+norm + unembed. (Linearizing the final LayerNorm too would strip the radial
+component that carries confidence; that subtlety is why the naive "JVP to the
+logits" curve comes out flat.) One extra forward per rung, no reverse graphs,
+works unchanged for GPT-2 (`ln_f`) and Llama/Qwen (`model.norm`) layouts.
+GPT-2's 13 rungs take under a second on a modest GPU; Qwen2.5-0.5B's 25 take ~3 s.
+
+What it shows: GPT-2 finding ` Paris` around layer 9 and locking in; the J-lens
+fixing the classic lens's garbage embed rung (≈51 bits naive → ≈11 transported);
+Qwen's mid-stack staying near-illegible to the classic lens while the J-lens
+reads the answer many layers earlier — the faithfulness gap, in bits.
+
 ## Roadmap
 
-See **[INSIGHTS.md](INSIGHTS.md)** for the conceptual through-line (every lens as
-a way to write, read, whiten, or account for an associative memory — all in bits)
-and the plan to absorb `x-logit-lens` as a real-model **logit lens** — per-layer
-next-token code length over GPT-2/Qwen via a small Python engine service, sharing
-the same `Step`/`CostBreakdown` shape and `CostPanel` axis as every other lens.
+See **[REFERENCE/INSIGHTS.md](REFERENCE/INSIGHTS.md)** for the conceptual
+through-line (every lens as a way to write, read, whiten, or account for an
+associative memory — all in bits) and
+**[REFERENCE/IDEAS.md](REFERENCE/IDEAS.md)** for the dataset backlog: the
+tinygrad-style two-digit addition task with a train/held-out split (prequential
+MDL made visible), grokking via modular addition, induction-head copy tasks,
+city–capital facts for the implant panel, log-file grammar samples,
+agglutinative morphology, molecule graphs for SUBDUE — and the WebGPU /
+transformers.js notes for a future static-hosting path.
 
 - **Speed (only if real vocabularies are loaded)** — the merge lens scores
   candidates by a full `cost(apply(...))` recompute; both code modes admit an exact

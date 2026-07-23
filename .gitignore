@@ -2,3 +2,5 @@ node_modules
 REFERENCE
 dist
 .claude
+.venv
+__pycache__
