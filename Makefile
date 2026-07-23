@@ -12,26 +12,37 @@ OFFLINE ?= 0
 export HF_HUB_OFFLINE := $(OFFLINE)
 
 .DEFAULT_GOAL := help
-.PHONY: help build up up-cpu web smoke down clean
+.PHONY: help build up up-cpu web smoke train down clean volume
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-13s\033[0m %s\n", $$1, $$2}'
 
+# The shared model volume is `external` in compose (so `down -v` can never
+# delete it); this idempotent create covers fresh machines.
+volume:
+	@docker volume create hf-cache >/dev/null
+
 build: ## Build all images (web, engine, smoke)
 	$(COMPOSE) $(ALL_PROFILES) build
 
-up: ## Web + engine (GPU) at http://localhost:5180 (WEB_PORT=... to remap)
+up: volume ## Web + engine (GPU) at http://localhost:5180 (WEB_PORT=... to remap)
 	$(COMPOSE) --profile gpu up --build --watch
 
-up-cpu: ## Web + engine (CPU) -- slower J-lens, no GPU needed
+up-cpu: volume ## Web + engine (CPU) -- slower J-lens, no GPU needed
 	$(COMPOSE) --profile cpu up --build --watch
 
 web: ## Just the Svelte sandbox (every lens except Logit·real)
 	$(COMPOSE) up --build --watch web
 
-smoke: ## Bits-ladder sanity check on GPU; PROMPT="..." and MODEL=... to override
+smoke: volume ## Bits-ladder sanity check on GPU; PROMPT="..." and MODEL=... to override
 	$(COMPOSE) run --rm --build smoke python smoke.py $(if $(PROMPT),"$(PROMPT)",)
+
+# Trains into the shared hf-cache volume; checkpoints appear in the model
+# dropdown as local/add-step0, local/add-mid, local/add-final.
+EPOCHS ?= 40
+train: volume ## Train the 2-digit addition GPT-2 (GPU); EPOCHS=... to override
+	$(COMPOSE) run --rm --build -e EPOCHS=$(EPOCHS) smoke python train.py
 
 down: ## Stop and remove containers
 	$(COMPOSE) $(ALL_PROFILES) down

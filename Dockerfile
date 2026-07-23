@@ -39,7 +39,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 RUN mkdir -p data
 
-COPY engine/lens.py engine/main.py engine/smoke.py ./
+COPY engine/lens.py engine/main.py engine/smoke.py engine/train.py ./
 
 EXPOSE 5181
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5181"]

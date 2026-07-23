@@ -92,6 +92,8 @@ volumes:
   hf-cache:
     # Fixed name on purpose: it opts out of compose's per-project prefixing so
     # x-logit-lens can mount the SAME volume (its compose declares the same
-    # name). Never `docker compose down -v` here -- that deletes the shared
-    # model cache for both projects.
+    # name). `external` means compose never creates or deletes it — even
+    # `down -v` can't take the shared model cache with it. The Makefile runs
+    # an idempotent `docker volume create hf-cache` before anything needs it.
     name: hf-cache
+    external: true

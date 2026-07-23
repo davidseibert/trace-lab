@@ -35,7 +35,8 @@ Model weights live in the **`hf-cache` named Docker volume**, shared with
 x-logit-lens (both compose files pin `name: hf-cache`, which opts out of
 compose's per-project prefixing) — so each model downloads once across both
 projects, and loads are fast because the volume lives inside the WSL2 VM.
-Never `down -v`: that deletes the shared cache. Inspect it with
+It's marked `external`, so compose can never delete it (not even `down -v`);
+the Makefile creates it on first use. Inspect it with
 `docker run --rm -v hf-cache:/v alpine du -sh /v/hf`. One escape hatch:
 `WEB_PORT=5199 make up` remaps the web port when something else squats
 on 5180. The engine's host port must stay 5181 (the browser calls it
@@ -377,6 +378,26 @@ What it shows: GPT-2 finding ` Paris` around layer 9 and locking in; the J-lens
 fixing the classic lens's garbage embed rung (≈51 bits naive → ≈11 transported);
 Qwen's mid-stack staying near-illegible to the classic lens while the J-lens
 reads the answer many layers earlier — the faithfulness gap, in bits.
+
+### Train your own model into the lens
+
+`make train` trains a 1.2M-param GPT-2 (real `transformers`, 6 layers) on the
+tinygrad-style **two-digit addition** task — every `"a+b="` as one character
+per token, loss only on the three answer digits, 8,000 sums train / 2,000 held
+out, so the reported exact-match is generalization, not recall. It converges
+to ~99.9% in under a minute on a GPU and saves three checkpoints **into the
+shared volume**, which the engine serves as `local/add-step0`, `local/add-mid`
+and `local/add-final` in the model dropdown (locally-saved models live next to
+the HF cache, never inside `hub/`, which is a download cache keyed by repo
+revision). Prompt it with `17+25=` — answers are fixed-width, so the correct
+continuation is `0`, `4`, `2`.
+
+The point: checkpoints turn the model dropdown into a **training-time axis**
+for the real J-lens — scrub depth within a checkpoint, switch checkpoints to
+scrub training, and watch where in depth the carry computation forms. (The
+training log is worth reading on its own: ten epochs stuck near 10% exact-match
+and then 14% → 51% → 86% in two epochs — memorization giving way to the
+algorithm.)
 
 ## Roadmap
 
