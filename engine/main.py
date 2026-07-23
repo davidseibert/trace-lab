@@ -48,6 +48,11 @@ class LensRequest(BaseModel):
     jlens: bool = True
 
 
+@app.get("/")
+def root():
+    return {"service": "x-mdl engine", "health": "/health", "docs": "/docs", "lens": "POST /lens"}
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "device": pick_device(), "loaded": list(_cache), "models": ALLOWED_MODELS}

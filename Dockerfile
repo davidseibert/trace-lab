@@ -15,20 +15,27 @@ EXPOSE 5180
 CMD ["bun", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5180", "--strictPort"]
 
 
-# ---- engine: the real-model lens service on the torch CUDA base ----
-FROM pytorch/pytorch:2.7.1-cuda11.8-cudnn9-runtime AS engine
+# ---- engine: the real-model lens service ----
+# One dependency story everywhere: the same pyproject.toml + uv.lock that drive
+# a local `uv sync` build this image too. The lockfile already pins CUDA torch
+# for linux (cu126 wheels bundle the CUDA libs), so a plain python base
+# suffices -- no pytorch base image, no separate requirements file.
+FROM python:3.12-slim AS engine
 
 ENV TZ=America/New_York
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV UV_LINK_MODE=copy
+ENV UV_COMPILE_BYTECODE=1
 
 WORKDIR /app
 
-# uv instead of pip: grab the static binary from the official image and install
-# the requirements into the base image's existing (torch-equipped) environment.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
-RUN --mount=type=bind,source=engine/requirements.txt,target=/tmp/requirements.txt \
-    uv pip install --system --no-cache --requirement /tmp/requirements.txt
+RUN --mount=type=bind,source=engine/pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=engine/uv.lock,target=uv.lock \
+    --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --no-dev
+ENV PATH="/app/.venv/bin:$PATH"
 
 RUN mkdir -p data
 

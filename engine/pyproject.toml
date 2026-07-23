@@ -5,7 +5,7 @@ description = "Real-model logit-lens / J-lens engine service for the Logit·real
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
-    "uvicorn>=0.30",
+    "uvicorn[standard]>=0.30",
     "transformers>=4.44",
     "torch>=2.6",
 ]

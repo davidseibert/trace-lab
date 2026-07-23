@@ -1,6 +1,0 @@
-# Docker-image deps only: torch comes from the pytorch CUDA base image -- don't
-# reinstall it here. Local (non-Docker) runs use pyproject.toml + uv sync instead,
-# which DOES pin torch (cu126 wheels on win/linux).
-fastapi>=0.115
-uvicorn>=0.30
-transformers>=4.44
