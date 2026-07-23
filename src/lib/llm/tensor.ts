@@ -352,8 +352,14 @@ export function crossEntropyLoss(logits: Tensor, targets: number[]): Tensor {
   return out;
 }
 
-/** Reverse-mode sweep: zero grads, seed the root, run backward in topo order. */
-export function backward(root: Tensor): void {
+/**
+ * Reverse-mode sweep: zero grads, seed the root, run backward in topo order.
+ * `seedIndex` picks which element of the root to differentiate (default 0, the
+ * scalar-loss case). Seeding one element of an intermediate tensor — e.g. one
+ * logit — turns a sweep into one row of a Jacobian, which is how the logit-lens
+ * J-transport is computed exactly.
+ */
+export function backward(root: Tensor, seedIndex = 0): void {
   const visited = new Set<number>();
   const order: Tensor[] = [];
   function topo(node: Tensor) {
@@ -364,7 +370,7 @@ export function backward(root: Tensor): void {
   }
   topo(root);
   for (const node of order) node.grad.fill(0);
-  root.grad[0] = 1;
+  root.grad[seedIndex] = 1;
   for (let i = order.length - 1; i >= 0; i--) order[i]._backward();
 }
 

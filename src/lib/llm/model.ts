@@ -237,6 +237,10 @@ class TransformerBlock implements Layer {
   ffn: FeedForward;
   ln1: LayerNorm;
   ln2: LayerNorm;
+  /** Residual after the attention sub-layer, kept live for the logit lens. */
+  lastRes1: Tensor | null = null;
+  /** ln2(res1) — the exact vector the FFN reads; the implant's key space. */
+  lastFfnIn: Tensor | null = null;
 
   constructor(dim: number, nHeads: number, ffnHid: number, rng: Rng) {
     this.attn = new MultiHeadAttention(dim, nHeads, rng);
@@ -246,11 +250,26 @@ class TransformerBlock implements Layer {
   }
   forward(x: Tensor): Tensor {
     const res1 = addElem(x, this.attn.forward(this.ln1.forward(x)));
-    return addElem(res1, this.ffn.forward(this.ln2.forward(res1)));
+    const ffnIn = this.ln2.forward(res1);
+    this.lastRes1 = res1;
+    this.lastFfnIn = ffnIn;
+    return addElem(res1, this.ffn.forward(ffnIn));
   }
   params(): Tensor[] {
     return [...this.attn.params(), ...this.ffn.params(), ...this.ln1.params(), ...this.ln2.params()];
   }
+}
+
+/**
+ * Live (autograd-connected) tensors from the most recent forward — the three
+ * rungs of the residual stream plus the logits. Unlike `ForwardViz` these are
+ * NOT snapshots: the logit lens backprops through them to get exact Jacobians.
+ */
+export interface ResidTensors {
+  embedded: Tensor;
+  attnResid: Tensor;
+  blockOut: Tensor;
+  logits: Tensor;
 }
 
 export class MiniGPT {
@@ -262,6 +281,8 @@ export class MiniGPT {
   head: Linear;
   /** Snapshot of the most recent forward pass. */
   viz: ForwardViz | null = null;
+  /** Live tensors of the most recent forward pass (for the logit lens). */
+  lastTensors: ResidTensors | null = null;
 
   constructor(cfg: ModelConfig, rng: Rng) {
     this.cfg = cfg;
@@ -299,6 +320,13 @@ export class MiniGPT {
       blockOut: blockOut.snapshot(),
       logits: logits.snapshot(),
       probs: softmaxVec(lastLogits)
+    };
+
+    this.lastTensors = {
+      embedded,
+      attnResid: this.block.lastRes1!,
+      blockOut,
+      logits
     };
 
     return logits;

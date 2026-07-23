@@ -1,10 +1,11 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { Player } from '../lib/player.svelte';
-  import { trainTrace, makeForward, type LlmStep } from '../lib/llm/trainTrace';
-  import type { ForwardViz } from '../lib/llm/model';
+  import { trainTrace, type LlmStep } from '../lib/llm/trainTrace';
   import { DATASETS, DATASET_KEYS } from '../lib/llm/datasets';
   import { tokenColor } from '../lib/llm/colors';
+  import { makeLab, type Lab, type EvalCase } from '../lib/llm/lab';
+  import type { FactSpec } from '../lib/llm/implant';
 
   import Controls from './Controls.svelte';
   import Panel from './Panel.svelte';
@@ -13,6 +14,8 @@
   import AttentionView from './llm/AttentionView.svelte';
   import OutputBars from './llm/OutputBars.svelte';
   import LossChart from './llm/LossChart.svelte';
+  import LensView from './llm/LensView.svelte';
+  import ImplantPanel from './llm/ImplantPanel.svelte';
   import { PanelManager } from '../lib/panels/panels.svelte';
 
   let { brand }: { brand: Snippet } = $props();
@@ -23,7 +26,9 @@
     { id: 'pos', title: 'With position' },
     { id: 'attn', title: 'Attention' },
     { id: 'ffn', title: 'Feed-forward' },
+    { id: 'implant', title: 'Implant facts' },
     { id: 'output', title: 'Next-token guess' },
+    { id: 'lens', title: 'Logit lens' },
     { id: 'loss', title: 'Loss over training' },
     { id: 'explain', title: 'Readout' }
   ]);
@@ -35,24 +40,35 @@
   const ds = $derived(DATASETS[datasetKey]);
   const player = new Player<LlmStep>();
 
-  // The fixed-probe trace + a forward function over the per-step weights, both
-  // rebuilt only when the dataset or seed changes — never on playback.
-  let forwardFn = $state<((stepIndex: number, tokenIds: number[]) => ForwardViz) | null>(null);
+  // The fixed-probe trace + the lab (replay + implant surgery over the per-step
+  // weights), both rebuilt only when the dataset or seed changes — never on
+  // playback.
+  let lab = $state<Lab | null>(null);
 
   $effect(() => {
-    const run = trainTrace(DATASETS[datasetKey], { steps: STEPS, seed });
+    const d = DATASETS[datasetKey];
+    const run = trainTrace(d, { steps: STEPS, seed });
     player.load(run.steps);
-    forwardFn = makeForward(run);
+    const toIds = (words: string[]) => words.map((w) => d.vocab.indexOf(w));
+    lab = makeLab(
+      run,
+      d.trainData.map((seq) => toIds(seq.slice(0, -1)))
+    );
   });
 
   // --- Query box: replay an arbitrary prompt against the current step's model.
   let queryText = $state(DATASETS[DATASET_KEYS[0]].probe.join(' '));
   let committedQuery = $state<number[] | null>(null);
 
-  // Reset the query whenever the dataset (and thus the vocabulary) changes.
+  // --- Implanted facts: applied on top of whichever step is selected.
+  let facts = $state<FactSpec[]>([]);
+  let factSeq = 0;
+
+  // Reset the query and implants whenever the dataset (and vocabulary) changes.
   $effect(() => {
     queryText = DATASETS[datasetKey].probe.join(' ');
     committedQuery = null;
+    facts = [];
   });
 
   function parseQuery(text: string): { ids?: number[]; error?: string } {
@@ -82,12 +98,53 @@
   const cur = $derived(player.current);
   const isQuery = $derived(committedQuery !== null);
 
-  // The forward pass currently on display: the user's committed query (replayed
-  // at the current step), otherwise the training probe.
-  const activeViz = $derived.by<ForwardViz | null>(() => {
-    if (committedQuery && forwardFn) return forwardFn(player.index, committedQuery);
-    return cur?.viz ?? null;
+  const idsOf = (words: string[]) => words.map((w) => ds.vocab.indexOf(w));
+
+  // The input currently on display: the user's committed query, else the probe.
+  const activeIds = $derived(committedQuery ?? idsOf(ds.probe));
+
+  // Forward pass through the current step's model — with implants grafted in.
+  const analysis = $derived.by(() => (lab ? lab.forward(player.index, activeIds, facts) : null));
+  const activeViz = $derived(analysis?.viz ?? null);
+
+  // Lazily computed (only while its panel is open): the rung-by-rung readout.
+  const lensReport = $derived.by(() => (lab && analysis ? lab.lens(player.index, activeIds, facts) : null));
+
+  // Description length of every training sequence + probe, before vs after the
+  // implants. Whole sequences are charged at every transition — L(seq|M) — so
+  // damage anywhere in a sequence shows up, not just at its final token.
+  const interferenceRows = $derived.by(() => {
+    if (!lab || facts.length === 0) return [];
+    const cases: EvalCase[] = [
+      ...facts.map((f) => ({
+        label: `${f.promptIds.map((id) => ds.vocab[id]).join(' ')} → ${ds.vocab[f.targetId]}`,
+        inputIds: f.promptIds,
+        targets: [{ pos: f.promptIds.length - 1, id: f.targetId }],
+        isFact: true
+      })),
+      ...ds.trainData.map((seq) => {
+        const t = idsOf(seq);
+        return {
+          label: seq.join(' '),
+          inputIds: t.slice(0, -1),
+          targets: t.slice(1).map((id, pos) => ({ pos, id }))
+        };
+      }),
+      {
+        label: `${ds.probe.join(' ')} → ${ds.probeTarget} ⟨probe⟩`,
+        inputIds: idsOf(ds.probe),
+        targets: [{ pos: ds.probe.length - 1, id: ds.vocab.indexOf(ds.probeTarget) }]
+      }
+    ];
+    return lab.interference(player.index, facts, cases);
   });
+
+  function addFact(f: Omit<FactSpec, 'key'>) {
+    facts = [...facts, { ...f, key: `f${factSeq++}` }];
+  }
+  function removeFact(key: string) {
+    facts = facts.filter((f) => f.key !== key);
+  }
 
   const activeTokens = $derived(activeViz ? activeViz.tokenIds.map((id) => ds.vocab[id]) : []);
   const activeColors = $derived(activeTokens.map((t) => tokenColor(ds, t)));
@@ -102,7 +159,10 @@
 
   const stepLoss = $derived(cur?.loss ?? 0);
   const note = $derived(cur?.note ?? '');
-  const probeLearned = $derived(cur ? cur.predToken === ds.probeTarget : false);
+  // Read these off the ACTIVE forward pass (not the precomputed trace) so they
+  // stay truthful when implants are grafted in.
+  const probeLearned = $derived(activePred.token === ds.probeTarget);
+  const activeTargetProb = $derived(activeViz ? activeViz.probs[ds.vocab.indexOf(ds.probeTarget)] : 0);
 </script>
 
 <div class="topbar panel">
@@ -170,6 +230,11 @@
         {#snippet actions()}<span class="mono">token + position</span>{/snippet}
         <ActGrid matrix={activeViz.embedded} rowLabels={activeTokens} rowColors={activeColors} signed />
       </Panel>
+
+      <Panel manager={panels} id="loss" weight={0.8}>
+        {#snippet actions()}<span class="mono">loss {stepLoss.toFixed(3)}</span>{/snippet}
+        <LossChart steps={player.steps} index={player.index} onSeek={(i) => player.seek(i)} />
+      </Panel>
     </div>
 
     <div class="col col-b">
@@ -179,8 +244,19 @@
       </Panel>
 
       <Panel manager={panels} id="ffn" weight={1}>
-        {#snippet actions()}<span class="mono">{ds.ffnHid} units</span>{/snippet}
-        <ActGrid matrix={activeViz.ffnHidden} rowLabels={activeTokens} rowColors={activeColors} signed={false} colLabel="units" />
+        {#snippet actions()}<span class="mono">{ds.ffnHid}{facts.length ? `+${facts.length}` : ''} units</span>{/snippet}
+        <ActGrid
+          matrix={activeViz.ffnHidden}
+          rowLabels={activeTokens}
+          rowColors={activeColors}
+          signed={false}
+          colLabel={facts.length ? `units (last ${facts.length} implanted)` : 'units'}
+        />
+      </Panel>
+
+      <Panel manager={panels} id="implant" weight={1.1}>
+        {#snippet actions()}<span class="mono">{facts.length} fact{facts.length === 1 ? '' : 's'}</span>{/snippet}
+        <ImplantPanel {ds} {facts} rows={interferenceRows} onAdd={addFact} onRemove={removeFact} />
       </Panel>
     </div>
 
@@ -190,9 +266,11 @@
         <OutputBars probs={activeViz.probs} vocab={ds.vocab} colors={vocabColors} predId={activePred.id} targetToken={isQuery ? '' : ds.probeTarget} />
       </Panel>
 
-      <Panel manager={panels} id="loss" weight={1}>
-        {#snippet actions()}<span class="mono">loss {stepLoss.toFixed(3)}</span>{/snippet}
-        <LossChart steps={player.steps} index={player.index} onSeek={(i) => player.seek(i)} />
+      <Panel manager={panels} id="lens" weight={1.2}>
+        {#snippet actions()}<span class="mono">−log₂ p by depth</span>{/snippet}
+        {#if lensReport}
+          <LensView report={lensReport} vocab={ds.vocab} colors={vocabColors} focusId={activePred.id} />
+        {/if}
       </Panel>
 
       <Panel manager={panels} id="explain" fit>
@@ -214,8 +292,15 @@
             </p>
             <p class="say muted">
               Correct continuation <span class="mono" style="color:{tokenColor(ds, ds.probeTarget)}">{ds.probeTarget}</span>
-              sits at <b>{(cur ? cur.targetProb * 100 : 0).toFixed(0)}%</b>
+              sits at <b>{(activeTargetProb * 100).toFixed(0)}%</b>
               {#if probeLearned}<span class="good"> — learned ✓</span>{/if}
+            </p>
+          {/if}
+          {#if facts.length}
+            <p class="say muted">
+              <b>{facts.length}</b> implanted fact{facts.length === 1 ? '' : 's'} active — written
+              straight into the FFN as key→value memory slots, no training. They re-apply at
+              every step, so scrubbing shows the same surgery against different weights.
             </p>
           {/if}
         </div>

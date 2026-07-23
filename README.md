@@ -266,7 +266,60 @@ it to compress. (`llmStream` codes token 0 under a uniform `log₂V`-bit prior, 
 the model has no left context to predict the first token, then rides the model's own
 distribution for every token after.)
 
+## Transformer lens — fact surgery, logit lens, J-lens
+
+The mini-GPT lens now treats the model as what INSIGHTS.md says it is: a
+whitened associative memory you can **write** to, **read** from, and **account
+for** in bits.
+
+**Implant facts (WRITE).** The `Implant facts` panel writes a fact into the FFN
+in closed form — no training step. The *key* is the FFN's actual input (ln2 of
+the residual) at the prompt's last position; the *value* is the target token's
+unembed column, centered over the vocabulary; the write is one grafted hidden
+unit — `fc1` column = key, `fc2` row = value — with a ReLU threshold gate (θ)
+so the memory only fires where the incoming vector aligns with its key. The
+`strength` knob is calibrated through the real final LayerNorm to mean "boost
+the target's logit by *s*" on every dataset. Implants re-apply to whichever
+training step the transport is scrubbed to, so the same surgery can be watched
+against untrained, half-trained, and converged weights — early keys are
+undifferentiated, and the damage shows.
+
+The interference table prices everything in the house currency: each training
+sequence's **description length** `Σ −log₂ p` before → after the implant. Δ<0
+on the fact's row is recall working; Δ>0 on an unrelated row is interference —
+the key firing where it shouldn't. A `whiten` toggle subtracts the mean
+FFN-input from the key before storing (the associative-memory capacity
+condition) — and the honest finding is that it often changes little *because
+ln2 is already doing it*: the capacity condition is built into the
+architecture. Implanting a **novel** prompt is nearly free; **overwriting** a
+trained fact is a visible tug-of-war between the grafted memory and the
+trained prior.
+
+**Logit lens (READ).** The one-block model has a three-rung residual ladder at
+the prediction position — `token+position → +attention → +feed-forward` — and
+the `Logit lens` panel decodes each rung through the final LayerNorm + unembed,
+reporting `−log₂ p` of the current prediction at every rung. "The prediction
+sharpens with depth" becomes the literal MDL statement: *the code for the next
+token shortens as the residual stream is refined.* The top rung equals the
+model's real output by construction.
+
+**J-lens.** The classic logit lens decodes early residuals *as if the network
+were done* — but the remaining layers still transform them. Because the model
+is tiny, the panel's `J-lens` mode computes the **exact Jacobian** of the
+remaining computation (one reverse-mode autograd sweep per dimension) and
+decodes `J·h` instead of `h`: the rung's content transported into the final
+basis before reading. Each rung also shows a **visibility** fraction — how much
+of the residual's norm lies in the row space of `∂logits/∂h` (centered, since
+softmax ignores uniform shifts). The remainder is blind directions: components
+that carry exactly zero bits about the next token, however large they are.
+
 ## Roadmap
+
+See **[INSIGHTS.md](INSIGHTS.md)** for the conceptual through-line (every lens as
+a way to write, read, whiten, or account for an associative memory — all in bits)
+and the plan to absorb `x-logit-lens` as a real-model **logit lens** — per-layer
+next-token code length over GPT-2/Qwen via a small Python engine service, sharing
+the same `Step`/`CostBreakdown` shape and `CostPanel` axis as every other lens.
 
 - **Speed (only if real vocabularies are loaded)** — the merge lens scores
   candidates by a full `cost(apply(...))` recompute; both code modes admit an exact
