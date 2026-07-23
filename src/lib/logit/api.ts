@@ -8,7 +8,8 @@
  * Start it from engine/:  uv run uvicorn main:app --port 5181
  */
 
-export const ENGINE_URL = 'http://127.0.0.1:5181';
+export const ENGINE_URL: string =
+  (import.meta.env.VITE_ENGINE_URL as string | undefined) ?? 'http://127.0.0.1:5181';
 
 /** One vocabulary entry of a top-k readout. */
 export interface TopTok {

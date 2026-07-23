@@ -16,6 +16,27 @@ bun run dev      # http://localhost:5180
 ```
 
 `bun run check` type-checks; `bun run build` produces a production bundle.
+The `Logit·real` lens additionally needs the engine service (see its section
+below), or just use Docker:
+
+### Run (Docker)
+
+Everything is wrapped in a `Makefile` (`make help` lists it):
+
+| command | what it does |
+|---|---|
+| `make up` | web + engine (GPU) → http://localhost:5180, engine on :5181 |
+| `make up-cpu` | same on CPU (slower J-lens, no GPU needed) |
+| `make web` | just the Svelte sandbox — every lens except Logit·real |
+| `make smoke` | one-shot bits-ladder sanity check (`PROMPT="…"`, `MODEL=…` to override) |
+| `make build` / `make down` / `make clean` | build images / stop / also remove images |
+
+Model downloads are cached under `./data` (via `HF_HOME`), so you pay each
+download once. Two escape hatches: `ENGINE_DATA=../x-logit-lens/data make up`
+reuses an existing HF cache from that repo, and `WEB_PORT=5199 make up` remaps
+the web port when something else squats on 5180. The engine's host port must
+stay 5181 (the browser calls it directly) unless you also set
+`VITE_ENGINE_URL`.
 
 ## What it does (string grammar lens)
 

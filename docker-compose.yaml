@@ -1,0 +1,88 @@
+name: x-mdl
+
+x-common:
+  gpu-mode: &gpu-mode
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+  # Point ENGINE_DATA at an existing HF cache dir to skip re-downloading models
+  # (e.g. ENGINE_DATA=../x-logit-lens/data reuses that repo's cache).
+  data-mount: &data-mount
+    volumes:
+      - ${ENGINE_DATA:-./data}:/app/data
+  engine-env: &engine-env
+    HF_HOME: /app/data/hf            # cache model downloads under ./data so they persist
+    LENS_MODEL: ${LENS_MODEL:-gpt2}  # smoke only; the web UI picks its model per request
+    TF_ENABLE_ONEDNN_OPTS: 0
+    # Weights may be cached, but `from_pretrained` still pings the Hub each
+    # launch to confirm the revision -- anonymously, hence the "unauthenticated
+    # requests" warning. Set HF_TOKEN (a `.env` file works) to authenticate, or
+    # HF_HUB_OFFLINE=1 to skip the check for models you've already pulled.
+    HF_TOKEN: ${HF_TOKEN:-}
+    HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}
+  engine-watch: &engine-watch
+    watch:
+      - action: sync+restart
+        path: engine
+        target: /app
+
+# NOTE: engine-cpu and engine-gpu are spelled out separately on purpose --
+# `extends` merges the `profiles` list, which would make the gpu service also
+# match `--profile cpu` and start both containers (they'd fight over the port).
+
+services:
+  # The Svelte sandbox. No profile: it starts with either engine flavor.
+  # WEB_PORT matters on hosts where something else squats on 5180.
+  web:
+    build:
+      context: .
+      target: web
+    ports:
+      - "${WEB_PORT:-5180}:5180"
+    develop:
+      watch:
+        - action: sync
+          path: src
+          target: /app/src
+        - action: sync
+          path: index.html
+          target: /app/index.html
+
+  # Real-model lens service (FastAPI + torch). The browser talks to it directly
+  # on localhost:5181, so the port mapping must stay 5181 unless VITE_ENGINE_URL
+  # is changed to match.
+  engine-gpu:
+    profiles: [gpu]
+    build:
+      context: .
+      target: engine
+    environment: *engine-env
+    ports:
+      - "5181:5181"
+    develop: *engine-watch
+    <<: [*gpu-mode, *data-mount]
+
+  engine-cpu:
+    profiles: [cpu]
+    build:
+      context: .
+      target: engine
+    environment: *engine-env
+    ports:
+      - "5181:5181"
+    develop: *engine-watch
+    <<: *data-mount
+
+  # One-shot CLI sanity check. Use `make smoke` or `docker compose run --rm smoke`.
+  smoke:
+    profiles: [smoke]
+    build:
+      context: .
+      target: engine
+    environment: *engine-env
+    command: ["python", "smoke.py"]
+    <<: [*gpu-mode, *data-mount]
