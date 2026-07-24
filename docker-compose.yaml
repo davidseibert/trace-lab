@@ -1,4 +1,4 @@
-name: x-mdl
+name: trace-lab
 
 x-common:
   gpu-mode: &gpu-mode
@@ -17,7 +17,7 @@ x-common:
       - hf-cache:/app/data
   engine-env: &engine-env
     HF_HOME: /app/data/hf            # cache model downloads under ./data so they persist
-    LENS_MODEL: ${LENS_MODEL:-gpt2}  # smoke only; the web UI picks its model per request
+    LENS_MODEL: ${LENS_MODEL:-gpt2}  # smoke default + the web/TUI default; the web UI picks per request
     TF_ENABLE_ONEDNN_OPTS: 0
     # Weights may be cached, but `from_pretrained` still pings the Hub each
     # launch to confirm the revision -- anonymously, hence the "unauthenticated
@@ -30,6 +30,16 @@ x-common:
       - action: sync+restart
         path: engine
         target: /app
+  # So `make tui` waits for uvicorn to be listening instead of racing it -- a
+  # TUI that starts a second early just shows "engine offline".
+  engine-health: &engine-health
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5181/health')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
 
 # NOTE: engine-cpu and engine-gpu are spelled out separately on purpose --
 # `extends` merges the `profiles` list, which would make the gpu service also
@@ -47,15 +57,15 @@ services:
     develop:
       watch:
         - action: sync
-          path: src
+          path: web/src
           target: /app/src
         - action: sync
-          path: index.html
+          path: web/index.html
           target: /app/index.html
 
   # Real-model lens service (FastAPI + torch). The browser talks to it directly
   # on localhost:5181, so the port mapping must stay 5181 unless VITE_ENGINE_URL
-  # is changed to match.
+  # is changed to match. The TUI reaches it by service name over the network.
   engine-gpu:
     profiles: [gpu]
     build:
@@ -65,7 +75,7 @@ services:
     ports:
       - "5181:5181"
     develop: *engine-watch
-    <<: [*gpu-mode, *data-mount]
+    <<: [*gpu-mode, *data-mount, *engine-health]
 
   engine-cpu:
     profiles: [cpu]
@@ -76,9 +86,28 @@ services:
     ports:
       - "5181:5181"
     develop: *engine-watch
-    <<: *data-mount
+    <<: [*data-mount, *engine-health]
 
-  # One-shot CLI sanity check. Use `make smoke` or `docker compose run --rm smoke`.
+  # OpenTUI front-end -- interactive poking. No CUDA and no model cache in this
+  # container; it reaches the engine by service name over the compose network.
+  # Needs a TTY, so use `docker compose run` (not `up`); `make tui` wraps it and
+  # brings the engine up first. No `depends_on` on purpose: the engine services
+  # are profile-gated (gpu/cpu), which a bare `run tui` can't resolve, and the
+  # engine's lifecycle is managed separately anyway -- the TUI just connects.
+  # Defaults to the GPU engine; LENS_ENGINE=http://engine-cpu:5181 to point at
+  # a CPU one you brought up yourself.
+  tui:
+    profiles: [tui]
+    build:
+      context: .
+      target: tui
+    environment:
+      LENS_ENGINE: ${LENS_ENGINE:-http://engine-gpu:5181}
+    stdin_open: true
+    tty: true
+
+  # One-shot CLI: `make smoke` (bits-ladder sanity check) and `make train`
+  # (trains checkpoints into the shared volume) both run through this service.
   smoke:
     profiles: [smoke]
     build:

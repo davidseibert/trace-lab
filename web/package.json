@@ -1,9 +1,9 @@
 {
-  "name": "x-mdl",
+  "name": "trace-lab-web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "An interactive, introspective explorer for the Minimum Description Length principle",
+  "description": "Svelte front-end for trace-lab: an interactive explorer for Minimum Description Length and the logit lens",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
