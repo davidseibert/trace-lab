@@ -11,8 +11,10 @@ card together.
 """
 from __future__ import annotations
 
+import gc
 import os
 import re
+from collections import OrderedDict
 from dataclasses import asdict
 from pathlib import Path
 
@@ -65,12 +67,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_cache: dict[str, tuple] = {}
+# Keep only a bounded set of models resident. Unbounded, every model you ever
+# load stays on the GPU -- and once VRAM fills, Windows/WDDM spills into shared
+# system memory and the whole machine hitches for seconds. So LRU-evict the
+# least-recently-used model and hand its VRAM back before loading a new one.
+# The local/add-* models are tiny; raise LENS_MAX_RESIDENT on a big card if you
+# want gpt2 / medium / large / Qwen all pinned at once.
+MAX_RESIDENT = max(1, int(os.environ.get("LENS_MAX_RESIDENT", "3")))
+_cache: "OrderedDict[str, tuple]" = OrderedDict()
+
+
+def _free_vram() -> None:
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 def _get(model_name: str):
-    if model_name not in _cache:
-        _cache[model_name] = load_model(_resolve(model_name))
+    if model_name in _cache:
+        _cache.move_to_end(model_name)  # mark most-recently-used
+        return _cache[model_name]
+    # Free room BEFORE allocating the newcomer, so peak VRAM stays bounded.
+    while len(_cache) >= MAX_RESIDENT:
+        _evicted, entry = _cache.popitem(last=False)  # least-recently-used
+        del entry
+        _free_vram()
+    _cache[model_name] = load_model(_resolve(model_name))
     return _cache[model_name]
 
 
@@ -105,6 +132,10 @@ def lens(req: LensRequest):
     model, tok, _device = _get(req.model)
     try:
         report = lens_report(model, tok, req.prompt, top_k=req.top_k, jlens=req.jlens)
+    except ValueError as e:
+        # A prompt the model can't index (too long / out of vocab). Caught on
+        # CPU by _preflight before it could poison the CUDA context.
+        raise HTTPException(400, str(e))
     except RuntimeError as e:
         raise HTTPException(500, str(e))
     return {"model": req.model, "prompt": req.prompt, **asdict(report)}

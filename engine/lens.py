@@ -139,10 +139,38 @@ class LensReport:
     uniform: float                 # log2(vocab) — the knows-nothing reference cost
 
 
+def _preflight(model, input_ids) -> None:
+    """Reject a prompt the model can't index BEFORE it reaches the GPU.
+
+    A token id >= vocab, or a sequence longer than the positional table, would
+    index out of range inside a CUDA embedding kernel -- which fires a
+    device-side assert that poisons the whole process's CUDA context, so every
+    later request (even loading another model) then fails. On CPU it's a plain
+    IndexError; either way we'd rather fail clean here with a clear message.
+    The tiny locally-trained models are where this bites: `local/add-*` has
+    n_positions=16, so the web/TUI default prompt (~34 char-tokens) overflows it.
+    """
+    seq_len = input_ids.shape[1]
+    max_pos = getattr(model.config, "n_positions", None) or getattr(
+        model.config, "max_position_embeddings", None
+    )
+    if max_pos is not None and seq_len > max_pos:
+        raise ValueError(
+            f"prompt is {seq_len} tokens but this model only has {max_pos} "
+            f"positions — shorten the prompt (this is a small model)."
+        )
+    vocab = model.get_input_embeddings().num_embeddings
+    if seq_len and int(input_ids.max()) >= vocab:
+        raise ValueError(f"prompt has a token id past this model's vocab of {vocab}.")
+
+
 @torch.no_grad()
 def lens_report(model, tok, text: str, top_k: int = 5, jlens: bool = False) -> LensReport:
     device = next(model.parameters()).device
-    enc = tok(text, return_tensors="pt").to(device)
+    enc = tok(text, return_tensors="pt")  # on CPU; validate before touching the GPU
+    input_ids = enc["input_ids"]
+    _preflight(model, input_ids)
+    enc = enc.to(device)
     input_ids = enc["input_ids"]
 
     out = model(**enc, output_hidden_states=True)
@@ -171,16 +199,24 @@ def lens_report(model, tok, text: str, top_k: int = 5, jlens: bool = False) -> L
     jbits: list[float] | None = None
     jtop: list[list[dict]] | None = None
     if jlens:
-        jbits, jtop = [], []
-        for idx in range(n):
-            if idx == n - 1:
-                # Top rung: J = identity, the two lenses agree by construction.
-                jp = final_probs
-            else:
-                jh = _jvp_transported(model, input_ids, hidden[idx], idx)
-                jp = unembed(final_norm(jh)).float().softmax(-1)
-            jbits.append(-math.log(max(float(jp[pred_id]), 1e-30)) / LN2)
-            jtop.append(_topk(jp, tok, top_k))
+        try:
+            jbits, jtop = [], []
+            for idx in range(n):
+                if idx == n - 1:
+                    # Top rung: J = identity, the two lenses agree by construction.
+                    jp = final_probs
+                else:
+                    jh = _jvp_transported(model, input_ids, hidden[idx], idx)
+                    jp = unembed(final_norm(jh)).float().softmax(-1)
+                jbits.append(-math.log(max(float(jp[pred_id]), 1e-30)) / LN2)
+                jtop.append(_topk(jp, tok, top_k))
+        except Exception as e:
+            # The JVP path on some architectures tries to JIT a Triton kernel;
+            # in a slim image with no C compiler that raises. Degrade to the
+            # classic lens (jbits stays null) rather than failing the whole
+            # request. Give the image a compiler to get the J-lens back.
+            jbits, jtop = None, None
+            print(f"[lens] J-lens unavailable ({type(e).__name__}: {e}); classic lens only")
 
     layer_names = ["embed"] + [f"layer {i}" for i in range(n - 2)] + ["final"]
     tokens = [_clean(tok.decode([int(t)])) for t in input_ids[0]]

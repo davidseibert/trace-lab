@@ -90,7 +90,10 @@ services:
 
   # OpenTUI front-end -- interactive poking. No CUDA and no model cache in this
   # container; it reaches the engine by service name over the compose network.
-  # Needs a TTY, so use `docker compose run` (not `up`); `make tui` wraps it.
+  # Needs a TTY, so use `docker compose run` (not `up`); `make tui` wraps it and
+  # brings the engine up first. No `depends_on` on purpose: the engine services
+  # are profile-gated (gpu/cpu), which a bare `run tui` can't resolve, and the
+  # engine's lifecycle is managed separately anyway -- the TUI just connects.
   # Defaults to the GPU engine; LENS_ENGINE=http://engine-cpu:5181 to point at
   # a CPU one you brought up yourself.
   tui:
@@ -100,9 +103,6 @@ services:
       target: tui
     environment:
       LENS_ENGINE: ${LENS_ENGINE:-http://engine-gpu:5181}
-    depends_on:
-      engine-gpu:
-        condition: service_healthy
     stdin_open: true
     tty: true
 

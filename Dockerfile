@@ -30,6 +30,16 @@ ENV UV_COMPILE_BYTECODE=1
 
 WORKDIR /app
 
+# Triton JIT-compiles CUDA kernels at runtime (the J-lens hits this on some
+# architectures, e.g. Qwen) and shells out to a C compiler to build the launcher
+# -- the slim base has none, so without this it fails with "Failed to find C
+# compiler". libc6-dev must be named explicitly: it's only a Recommends of gcc,
+# so --no-install-recommends leaves gcc with no libc headers and every compile
+# dies on `stdio.h: No such file`. Keep the layer small and cached before deps.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 RUN --mount=type=bind,source=engine/pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=engine/uv.lock,target=uv.lock \
