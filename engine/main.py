@@ -106,6 +106,9 @@ class LensRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=2000)
     top_k: int = Field(default=5, ge=1, le=20)
     jlens: bool = True
+    # Greedily decode this many tokens server-side and lens over
+    # prompt+continuation, so multi-token answers get a column per token.
+    rollout: int = Field(default=0, ge=0, le=64)
 
 
 @app.get("/")
@@ -131,7 +134,9 @@ def health():
 def lens(req: LensRequest):
     model, tok, _device = _get(req.model)
     try:
-        report = lens_report(model, tok, req.prompt, top_k=req.top_k, jlens=req.jlens)
+        report = lens_report(
+            model, tok, req.prompt, top_k=req.top_k, jlens=req.jlens, rollout=req.rollout
+        )
     except ValueError as e:
         # A prompt the model can't index (too long / out of vocab). Caught on
         # CPU by _preflight before it could poison the CUDA context.

@@ -45,6 +45,8 @@ export interface LensResponse {
   pred: { token: string; p: number; bits: number };
   /** log₂(vocab) — the knows-nothing reference cost. */
   uniform: number;
+  /** tokens[:n_prompt] are the prompt; the rest are server-side rollout. */
+  n_prompt: number;
 }
 
 export async function fetchHealth(): Promise<EngineHealth> {
@@ -58,11 +60,13 @@ export async function fetchLens(req: {
   prompt: string;
   top_k?: number;
   jlens?: boolean;
+  /** Greedy-decode this many tokens server-side; the lens covers prompt+continuation. */
+  rollout?: number;
 }): Promise<LensResponse> {
   const res = await fetch(`${ENGINE_URL}/lens`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ top_k: 8, jlens: true, ...req }),
+    body: JSON.stringify({ top_k: 8, jlens: true, rollout: 0, ...req }),
   });
   if (!res.ok) {
     const detail = await res

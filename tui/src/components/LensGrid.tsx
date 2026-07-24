@@ -19,6 +19,8 @@ export function LensGrid(props: {
   layers: string[];
   tokens: string[];
   grid: TopTok[][][];
+  /** tokens[:nPrompt] are the prompt; later columns are server-side rollout. */
+  nPrompt: number;
   /** Current layer (0 = embed). */
   rung: number;
   /** Selected input position. */
@@ -26,7 +28,7 @@ export function LensGrid(props: {
   width: number;
   height: number;
 }) {
-  const { layers, tokens, grid, rung, pos, width, height } = props;
+  const { layers, tokens, grid, nPrompt, rung, pos, width, height } = props;
 
   // Deepest layer on top — same ordering as the old Textual grid.
   const order = layers.map((_, i) => i).reverse();
@@ -52,7 +54,7 @@ export function LensGrid(props: {
         {cols.map((p) => (
           <span
             key={p}
-            fg={p === pos ? theme.text : theme.muted}
+            fg={p === pos ? theme.text : p >= nPrompt ? theme.data : theme.muted}
             attributes={p === pos ? TextAttributes.BOLD : 0}
           >
             {fit(tokens[p]!, CELL_W)}

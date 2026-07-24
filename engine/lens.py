@@ -137,9 +137,10 @@ class LensReport:
     jtop: list[list[dict]] | None  # [layer] -> top-k of the J-decode, last position
     pred: dict                     # the model's real next-token prediction
     uniform: float                 # log2(vocab) — the knows-nothing reference cost
+    n_prompt: int                  # tokens[:n_prompt] are the prompt; the rest are rollout
 
 
-def _preflight(model, input_ids) -> None:
+def _preflight(model, input_ids, rollout: int = 0) -> None:
     """Reject a prompt the model can't index BEFORE it reaches the GPU.
 
     A token id >= vocab, or a sequence longer than the positional table, would
@@ -149,14 +150,16 @@ def _preflight(model, input_ids) -> None:
     IndexError; either way we'd rather fail clean here with a clear message.
     The tiny locally-trained models are where this bites: `local/add-*` has
     n_positions=16, so the web/TUI default prompt (~34 char-tokens) overflows it.
+    Rollout tokens occupy positions too, so they count against the same budget.
     """
     seq_len = input_ids.shape[1]
     max_pos = getattr(model.config, "n_positions", None) or getattr(
         model.config, "max_position_embeddings", None
     )
-    if max_pos is not None and seq_len > max_pos:
+    if max_pos is not None and seq_len + rollout > max_pos:
+        grown = f" + {rollout} rollout tokens" if rollout else ""
         raise ValueError(
-            f"prompt is {seq_len} tokens but this model only has {max_pos} "
+            f"prompt is {seq_len} tokens{grown} but this model only has {max_pos} "
             f"positions — shorten the prompt (this is a small model)."
         )
     vocab = model.get_input_embeddings().num_embeddings
@@ -165,13 +168,26 @@ def _preflight(model, input_ids) -> None:
 
 
 @torch.no_grad()
-def lens_report(model, tok, text: str, top_k: int = 5, jlens: bool = False) -> LensReport:
+def lens_report(
+    model, tok, text: str, top_k: int = 5, jlens: bool = False, rollout: int = 0
+) -> LensReport:
     device = next(model.parameters()).device
     enc = tok(text, return_tensors="pt")  # on CPU; validate before touching the GPU
     input_ids = enc["input_ids"]
-    _preflight(model, input_ids)
+    _preflight(model, input_ids, rollout)
     enc = enc.to(device)
     input_ids = enc["input_ids"]
+    n_prompt = input_ids.shape[1]
+
+    # Rollout: greedily decode `rollout` tokens and lens over prompt+continuation.
+    # Each grid column only attends to positions before it (causal), so forcing
+    # the model's own answer in doesn't leak anything backwards — it just gives
+    # every generated token its own column to watch form with depth.
+    for _ in range(rollout):
+        step = model(input_ids=input_ids).logits[:, -1].argmax(-1, keepdim=True)
+        input_ids = torch.cat([input_ids, step], dim=1)
+    if rollout:
+        enc = {"input_ids": input_ids, "attention_mask": torch.ones_like(input_ids)}
 
     out = model(**enc, output_hidden_states=True)
     hidden = out.hidden_states  # n_layers+1 tensors [1, seq, d]; last one is post-final-norm
@@ -222,4 +238,4 @@ def lens_report(model, tok, text: str, top_k: int = 5, jlens: bool = False) -> L
     tokens = [_clean(tok.decode([int(t)])) for t in input_ids[0]]
     return LensReport(tokens=tokens, layers=layer_names, grid=grid, bits=bits,
                       jbits=jbits, jtop=jtop, pred=pred,
-                      uniform=math.log2(out.logits.shape[-1]))
+                      uniform=math.log2(out.logits.shape[-1]), n_prompt=n_prompt)

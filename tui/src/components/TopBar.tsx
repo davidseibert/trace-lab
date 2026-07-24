@@ -10,13 +10,15 @@ export function TopBar(props: {
   model: string;
   prompt: string;
   jlens: boolean;
+  /** Server-side greedy continuation length (0 = off); `r` cycles it. */
+  rollout: number;
   device: string | null;
   loading: boolean;
   focused: boolean;
   width: number;
   onInput: (value: string) => void;
 }) {
-  const { model, prompt, jlens, device, loading, focused, width } = props;
+  const { model, prompt, jlens, rollout, device, loading, focused, width } = props;
   const roomy = width >= 100;
 
   return (
@@ -61,6 +63,9 @@ export function TopBar(props: {
       </box>
       <text style={{ flexShrink: 0 }}>
         <span fg={jlens ? theme.model : theme.faint}>{jlens ? "J ✓" : "J ✗"}</span>
+      </text>
+      <text style={{ flexShrink: 0 }}>
+        <span fg={rollout ? theme.data : theme.faint}>{rollout ? `▸${rollout}` : "▸0"}</span>
       </text>
       <text style={{ flexShrink: 0 }}>
         <span fg={device === null ? theme.bad : loading ? theme.data : theme.ok}>

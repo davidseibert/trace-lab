@@ -26,6 +26,7 @@
   let models = $state<string[]>(['gpt2', 'gpt2-medium', 'gpt2-large', 'Qwen/Qwen2.5-0.5B']);
   let prompt = $state('The Eiffel Tower is in the city of');
   let jlens = $state(true);
+  let rollout = $state(0);
 
   let device = $state<string | null>(null); // null = engine unreachable
   let loading = $state(false);
@@ -50,7 +51,7 @@
     loading = true;
     error = '';
     try {
-      const r = await fetchLens({ model: modelName, prompt, jlens });
+      const r = await fetchLens({ model: modelName, prompt, jlens, rollout });
       resp = r;
       selPos = r.tokens.length - 1;
       player.load(r.layers.map((_, i) => i));
@@ -115,6 +116,11 @@
     <input type="checkbox" bind:checked={jlens} /> J-lens
   </label>
 
+  <label class="f" title="greedy-decode this many tokens server-side and lens over prompt+continuation — one column per generated token">
+    <span class="lbl">rollout</span>
+    <input class="rollout mono" type="number" min="0" max="64" bind:value={rollout} />
+  </label>
+
   <button class="primary" onclick={run} disabled={loading || device === null}>
     {loading ? 'running…' : 'run ▸'}
   </button>
@@ -152,6 +158,7 @@ uv run uvicorn main:app --port 5181</pre>
           layers={resp.layers}
           tokens={resp.tokens}
           grid={resp.grid}
+          nPrompt={resp.n_prompt ?? resp.tokens.length}
           index={cur}
           {selPos}
           onPick={pick}
@@ -236,6 +243,7 @@ uv run uvicorn main:app --port 5181</pre>
   .lbl { font-size: 11px; color: var(--muted); }
   .data-input { flex: 1; min-width: 200px; }
   .cb { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .rollout { width: 52px; }
   .status { font-size: 10.5px; color: var(--ok, #4dc07d); white-space: nowrap; }
   .status.off { color: var(--bad, #e5484d); }
 

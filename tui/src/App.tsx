@@ -20,6 +20,7 @@ export function App() {
   const [model, setModel] = useState("gpt2");
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
   const [jlens, setJlens] = useState(true);
+  const [rollout, setRollout] = useState(0);
 
   const [resp, setResp] = useState<LensResponse | null>(null);
   const [rung, setRung] = useState(0);
@@ -47,15 +48,19 @@ export function App() {
   }, []);
 
   const run = useCallback(
-    async (over: { model?: string; prompt?: string; jlens?: boolean } = {}) => {
+    async (over: { model?: string; prompt?: string; jlens?: boolean; rollout?: number } = {}) => {
       const req = {
         model: over.model ?? model,
         prompt: (over.prompt ?? draft.current).trim(),
         jlens: over.jlens ?? jlens,
+        rollout: over.rollout ?? rollout,
       };
       if (!req.prompt) return;
       setLoading(true);
-      setMessage(`${req.model} · ${req.jlens ? "logit + J-lens" : "logit lens"} …`);
+      setMessage(
+        `${req.model} · ${req.jlens ? "logit + J-lens" : "logit lens"}` +
+          `${req.rollout ? ` · rollout ${req.rollout}` : ""} …`,
+      );
       const started = Date.now();
       try {
         const r = await fetchLens(req);
@@ -73,7 +78,7 @@ export function App() {
         setLoading(false);
       }
     },
-    [model, jlens, checkHealth],
+    [model, jlens, rollout, checkHealth],
   );
 
   // On entry: if the engine answers, run the default prompt so the lens is
@@ -115,6 +120,15 @@ export function App() {
         const next = !jlens;
         setJlens(next);
         void run({ jlens: next });
+        return;
+      }
+      case "r": {
+        // Cycle the server-side rollout: how many tokens the engine greedily
+        // decodes and appends before lensing, one grid column per token.
+        const steps = [0, 3, 8, 16];
+        const next = steps[(steps.indexOf(rollout) + 1) % steps.length]!;
+        setRollout(next);
+        void run({ rollout: next });
         return;
       }
       case "m": {
@@ -164,6 +178,7 @@ export function App() {
         model={model}
         prompt={prompt}
         jlens={jlens}
+        rollout={rollout}
         device={device}
         loading={loading}
         focused={focus === "prompt"}
@@ -180,6 +195,7 @@ export function App() {
               layers={resp.layers}
               tokens={resp.tokens}
               grid={resp.grid}
+              nPrompt={resp.n_prompt ?? resp.tokens.length}
               rung={rung}
               pos={pos}
               width={gridW - 4}

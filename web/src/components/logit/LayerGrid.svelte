@@ -9,6 +9,7 @@
     layers,
     tokens,
     grid,
+    nPrompt,
     index,
     selPos,
     onPick
@@ -16,6 +17,8 @@
     layers: string[];
     tokens: string[];
     grid: TopTok[][][];
+    /** tokens[:nPrompt] are the prompt; later columns are server-side rollout. */
+    nPrompt: number;
     /** Current player row (layer index, 0 = embed). */
     index: number;
     /** Selected position column. */
@@ -35,7 +38,12 @@
       <tr>
         <th class="lname"></th>
         {#each tokens as t, p (p)}
-          <th class="pos" class:sel={p === selPos} title="input position {p}">{t}</th>
+          <th
+            class="pos"
+            class:sel={p === selPos}
+            class:gen={p >= nPrompt}
+            title={p >= nPrompt ? `rollout position ${p} (model-generated)` : `input position ${p}`}
+          >{t}</th>
         {/each}
       </tr>
     </thead>
@@ -78,6 +86,7 @@
     background: var(--panel);
   }
   th.pos.sel { color: var(--text); }
+  th.pos.gen { color: var(--data); font-style: italic; }
 
   td.lname, th.lname {
     color: var(--faint);
