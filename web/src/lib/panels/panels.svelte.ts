@@ -39,7 +39,7 @@ export class PanelManager {
   #storageKey: string;
 
   constructor(key: string, defs: PanelDef[]) {
-    this.#storageKey = `x-mdl:panels:${key}`;
+    this.#storageKey = `trace-lab:panels:${key}`;
     const saved = this.#load();
 
     this.order = defs.map((d) => d.id);
