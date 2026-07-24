@@ -1,5 +1,5 @@
 COMPOSE := docker compose
-ALL_PROFILES := --profile gpu --profile cpu --profile smoke
+ALL_PROFILES := --profile gpu --profile cpu --profile tui --profile smoke
 
 # Model for `make smoke`; override per-invocation, e.g. `make smoke MODEL=gpt2-large`
 MODEL ?= gpt2
@@ -12,7 +12,7 @@ OFFLINE ?= 0
 export HF_HUB_OFFLINE := $(OFFLINE)
 
 .DEFAULT_GOAL := help
-.PHONY: help build up up-cpu web smoke train down clean volume
+.PHONY: help build up up-cpu web tui smoke train down clean volume
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -34,6 +34,13 @@ up-cpu: volume ## Web + engine (CPU) -- slower J-lens, no GPU needed
 
 web: ## Just the Svelte sandbox (every lens except Logit·real)
 	$(COMPOSE) up --build --watch web
+
+# The engine must be listening before the TUI attaches; --wait blocks on its
+# healthcheck. LENS_ENGINE=http://engine-cpu:5181 (with a running engine-cpu)
+# points the TUI at a CPU engine instead.
+tui: volume ## Launch the OpenTUI terminal front-end (GPU engine starts first)
+	$(COMPOSE) --profile gpu up -d --build --wait engine-gpu
+	$(COMPOSE) run --rm --build tui
 
 smoke: volume ## Bits-ladder sanity check on GPU; PROMPT="..." and MODEL=... to override
 	$(COMPOSE) run --rm --build smoke python smoke.py $(if $(PROMPT),"$(PROMPT)",)

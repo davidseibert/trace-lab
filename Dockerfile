@@ -1,15 +1,15 @@
 # ---- web: the Svelte/Vite sandbox, served by Vite's dev server under bun ----
 # Dev server on purpose (not a static build): this is a sandbox, and compose
-# watch syncs src/ into the container so HMR keeps working.
+# watch syncs web/src into the container so HMR keeps working.
 FROM oven/bun:1 AS web
 
 WORKDIR /app
 
-COPY package.json bun.lock ./
+COPY web/package.json web/bun.lock ./
 RUN bun install --frozen-lockfile
 
-COPY index.html svelte.config.js tsconfig.json vite.config.ts ./
-COPY src ./src/
+COPY web/index.html web/svelte.config.js web/tsconfig.json web/vite.config.ts ./
+COPY web/src ./src/
 
 EXPOSE 5180
 CMD ["bun", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5180", "--strictPort"]
@@ -43,3 +43,21 @@ COPY engine/lens.py engine/main.py engine/smoke.py engine/train.py ./
 
 EXPOSE 5181
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5181"]
+
+
+# ---- tui: the OpenTUI terminal front-end (Bun + a native Zig core) ----
+# No CUDA and no model cache in this image; it reaches the engine over HTTP by
+# service name. `bun install` pulls @opentui/core's prebuilt native binary for
+# this platform as an optional dependency, so no Zig toolchain is needed here.
+# Interactive -- run it with `docker compose run --rm tui` (not `up`).
+FROM oven/bun:1 AS tui
+
+WORKDIR /app
+
+COPY tui/package.json tui/bun.lock ./
+RUN bun install --frozen-lockfile
+
+COPY tui/tsconfig.json ./
+COPY tui/src ./src/
+
+CMD ["bun", "run", "src/index.tsx"]
