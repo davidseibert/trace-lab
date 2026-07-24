@@ -2,7 +2,13 @@
   import type { Snippet } from 'svelte';
   import { Player } from '../lib/player.svelte';
   import { PanelManager } from '../lib/panels/panels.svelte';
-  import { fetchHealth, fetchLens, type LensResponse } from '../lib/logit/api';
+  import {
+    fetchColumn,
+    fetchHealth,
+    fetchLens,
+    type ColumnResponse,
+    type LensResponse
+  } from '../lib/logit/api';
 
   import Controls from './Controls.svelte';
   import Panel from './Panel.svelte';
@@ -33,6 +39,8 @@
   let error = $state('');
   let resp = $state<LensResponse | null>(null);
   let selPos = $state(0);
+  let col = $state<ColumnResponse | null>(null);
+  let colSeq = 0;
 
   async function checkHealth() {
     try {
@@ -77,13 +85,52 @@
     selPos = pos;
   }
 
+  // Lazy per-column ladder: /lens carries bits/J only for the last column, so
+  // selecting another one asks the engine for that column's ladder (a forward
+  // pass plus one JVP per rung). Sequence-guarded so a slow reply can't land
+  // on a newer selection.
+  $effect(() => {
+    const r = resp;
+    if (!r) return;
+    const p = selPos;
+    const seq = ++colSeq;
+    col = null;
+    if (p === r.tokens.length - 1) return; // /lens already has this ladder
+    fetchColumn({
+      model: r.model,
+      prompt: r.prompt,
+      pos: p,
+      jlens,
+      rollout: r.tokens.length - (r.n_prompt ?? r.tokens.length)
+    })
+      .then((c) => {
+        if (seq === colSeq) col = c;
+      })
+      .catch(() => {}); // the grid cell still shows its classic top-k
+  });
+
   const cur = $derived(player.index);
-  const note = $derived(
-    resp ? `${resp.layers[cur]} — ${resp.bits[cur]?.toFixed(2)}b for “${resp.pred.token}”` : ''
-  );
   const atPred = $derived(resp !== null && selPos === resp.tokens.length - 1);
+  // The selected column's ladder: straight off /lens at the last column, the
+  // lazily fetched one elsewhere, null while that fetch is in flight.
+  const ladder = $derived(
+    !resp
+      ? null
+      : atPred
+        ? { pred: resp.pred, bits: resp.bits, jbits: resp.jbits, jtop: resp.jtop }
+        : col && col.pos === selPos
+          ? { pred: col.pred, bits: col.bits, jbits: col.jbits, jtop: col.jtop }
+          : null
+  );
+  const note = $derived(
+    resp
+      ? ladder
+        ? `${resp.layers[cur]} — ${ladder.bits[cur]?.toFixed(2)}b for “${ladder.pred.token}”`
+        : `${resp.layers[cur]} — computing column ${selPos}…`
+      : ''
+  );
   const cellTop = $derived(resp ? resp.grid[cur]?.[selPos] ?? [] : []);
-  const jTop = $derived(resp?.jtop && atPred ? resp.jtop[cur] : null);
+  const jTop = $derived(ladder?.jtop ? ladder.jtop[cur] : null);
 
   const barW = (bits: number) =>
     resp ? `${Math.min(100, (bits / (resp.uniform * 1.3)) * 100)}%` : '0%';
@@ -169,11 +216,11 @@ uv run uvicorn main:app --port 5181</pre>
     <div class="col side">
       <Panel manager={panels} id="depth" weight={1}>
         <DepthChart
-          bits={resp.bits}
-          jbits={resp.jbits}
+          bits={ladder?.bits ?? resp.bits}
+          jbits={ladder?.jbits ?? null}
           uniform={resp.uniform}
           index={cur}
-          predToken={resp.pred.token}
+          predToken={ladder?.pred.token ?? resp.pred.token}
           onSeek={(i) => player.seek(i)}
         />
       </Panel>
@@ -192,15 +239,15 @@ uv run uvicorn main:app --port 5181</pre>
                 <span class="pct mono">{(p * 100).toFixed(1)}%</span>
               </div>
             {/each}
-            {#if atPred}
+            {#if ladder}
               <div class="bitsline mono faint">
-                −log₂ p({resp.pred.token}) = <b style="color:var(--data)">{resp.bits[cur]?.toFixed(2)}b</b>
-                <span class="track slim"><span class="fill" style="width:{barW(resp.bits[cur] ?? 0)}; background:var(--data)"></span></span>
+                −log₂ p({ladder.pred.token}) = <b style="color:var(--data)">{ladder.bits[cur]?.toFixed(2)}b</b>
+                <span class="track slim"><span class="fill" style="width:{barW(ladder.bits[cur] ?? 0)}; background:var(--data)"></span></span>
               </div>
             {/if}
           </div>
 
-          {#if jTop}
+          {#if jTop && ladder}
             <div class="group">
               <div class="ghead mono faint">J-lens — transported through the remaining layers first</div>
               {#each jTop as { t, p } (t)}
@@ -211,18 +258,20 @@ uv run uvicorn main:app --port 5181</pre>
                 </div>
               {/each}
               <div class="bitsline mono faint">
-                −log₂ p({resp.pred.token}) = <b style="color:var(--model)">{resp.jbits?.[cur]?.toFixed(2)}b</b>
-                <span class="track slim"><span class="fill" style="width:{barW(resp.jbits?.[cur] ?? 0)}; background:var(--model)"></span></span>
+                −log₂ p({ladder.pred.token}) = <b style="color:var(--model)">{ladder.jbits?.[cur]?.toFixed(2)}b</b>
+                <span class="track slim"><span class="fill" style="width:{barW(ladder.jbits?.[cur] ?? 0)}; background:var(--model)"></span></span>
               </div>
             </div>
-          {:else if resp.jtop}
-            <div class="ghead mono faint">J-lens readout is at the prediction position — click the last column</div>
+          {:else if !ladder}
+            <div class="ghead mono faint">computing this column's ladder…</div>
           {/if}
 
-          <div class="predline mono faint">
-            model's answer: <b>{resp.pred.token}</b> ({(resp.pred.p * 100).toFixed(1)}%,
-            {resp.pred.bits.toFixed(2)}b) · uniform {resp.uniform.toFixed(1)}b
-          </div>
+          {#if ladder}
+            <div class="predline mono faint">
+              after this: <b>{ladder.pred.token}</b> ({(ladder.pred.p * 100).toFixed(1)}%,
+              {ladder.pred.bits.toFixed(2)}b) · uniform {resp.uniform.toFixed(1)}b
+            </div>
+          {/if}
         </div>
       </Panel>
     </div>

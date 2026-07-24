@@ -1,7 +1,14 @@
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ENGINE_URL, fetchHealth, fetchLens, type LensResponse } from "./api";
+import {
+  ENGINE_URL,
+  fetchColumn,
+  fetchHealth,
+  fetchLens,
+  type ColumnResponse,
+  type LensResponse,
+} from "./api";
 import { DepthChart } from "./components/DepthChart";
 import { LensGrid } from "./components/LensGrid";
 import { Readout } from "./components/Readout";
@@ -23,6 +30,7 @@ export function App() {
   const [rollout, setRollout] = useState(0);
 
   const [resp, setResp] = useState<LensResponse | null>(null);
+  const [col, setCol] = useState<ColumnResponse | null>(null);
   const [rung, setRung] = useState(0);
   const [pos, setPos] = useState(0);
 
@@ -88,6 +96,44 @@ export function App() {
       if (ok) void run();
     });
   }, []);
+
+  // Lazy per-column ladder: /lens carries bits/J only for the last column, so
+  // selecting another one asks the engine for that column's ladder (a forward
+  // pass plus one JVP per rung). Debounced — arrows scrub faster than JVPs run
+  // — and sequence-guarded so a slow reply can't land on a newer selection.
+  const colSeq = useRef(0);
+  useEffect(() => {
+    if (!resp) return;
+    const seq = ++colSeq.current;
+    setCol(null);
+    if (pos === resp.tokens.length - 1) return; // /lens already has this ladder
+    const t = setTimeout(async () => {
+      try {
+        const c = await fetchColumn({
+          model: resp.model,
+          prompt: resp.prompt,
+          pos,
+          jlens,
+          rollout: resp.tokens.length - resp.n_prompt,
+        });
+        if (seq === colSeq.current) setCol(c);
+      } catch {
+        // Leave the ladder empty; the grid cell still shows its classic top-k.
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [resp, pos, jlens]);
+
+  // The ladder for the selected column: straight off /lens at the last column,
+  // the lazily fetched one elsewhere, null while that fetch is in flight.
+  const atLast = resp !== null && pos === resp.tokens.length - 1;
+  const ladder = !resp
+    ? null
+    : atLast
+      ? { pred: resp.pred, bits: resp.bits, jbits: resp.jbits, jtop: resp.jtop }
+      : col && col.pos === pos
+        ? { pred: col.pred, bits: col.bits, jbits: col.jbits, jtop: col.jtop }
+        : null;
 
   useKeyboard((key) => {
     if (key.name === "tab") {
@@ -206,17 +252,17 @@ export function App() {
           <box style={{ flexDirection: "column", width: sideW, height: bodyH }}>
             <box title="code length by depth" style={{ ...panel, width: sideW, height: chartH }}>
               <DepthChart
-                bits={resp.bits}
-                jbits={resp.jbits}
+                bits={ladder?.bits ?? resp.bits}
+                jbits={ladder?.jbits ?? null}
                 uniform={resp.uniform}
                 rung={rung}
-                predToken={resp.pred.token}
+                predToken={ladder?.pred.token ?? resp.pred.token}
                 width={sideW - 4}
                 height={chartH - 2}
               />
             </box>
             <box title="rung readout" style={{ ...panel, width: sideW, height: readH }}>
-              <Readout resp={resp} rung={rung} pos={pos} width={sideW - 4} height={readH - 2} />
+              <Readout resp={resp} ladder={ladder} rung={rung} pos={pos} width={sideW - 4} height={readH - 2} />
             </box>
           </box>
         </box>
@@ -228,8 +274,8 @@ export function App() {
         layer={resp ? (resp.layers[rung] ?? null) : null}
         rung={rung}
         rungs={resp?.layers.length ?? 0}
-        bits={resp?.bits[rung] ?? null}
-        jbits={resp?.jbits?.[rung] ?? null}
+        bits={ladder?.bits[rung] ?? null}
+        jbits={ladder?.jbits?.[rung] ?? null}
         message={message}
         width={W - 2}
       />

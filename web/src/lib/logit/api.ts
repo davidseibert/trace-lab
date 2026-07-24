@@ -47,6 +47,20 @@ export interface LensResponse {
   n_prompt: number;
 }
 
+/** The depth ladder at one selected column — what /lens carries for the last
+ * column, recomputed server-side for any other on selection. */
+export interface ColumnResponse {
+  model: string;
+  prompt: string;
+  pos: number;
+  /** The model's real prediction *after* this column. */
+  pred: { token: string; p: number; bits: number };
+  bits: number[];
+  jbits: number[] | null;
+  jtop: TopTok[][] | null;
+  uniform: number;
+}
+
 export async function fetchHealth(): Promise<EngineHealth> {
   const res = await fetch(`${ENGINE_URL}/health`);
   if (!res.ok) throw new Error(`engine ${res.status}`);
@@ -62,6 +76,26 @@ export async function fetchLens(req: {
   rollout?: number;
 }): Promise<LensResponse> {
   const res = await fetch(`${ENGINE_URL}/lens`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ top_k: 5, jlens: true, rollout: 0, ...req })
+  });
+  if (!res.ok) {
+    const detail = await res.json().then((j) => j.detail ?? res.statusText).catch(() => res.statusText);
+    throw new Error(String(detail));
+  }
+  return res.json();
+}
+
+export async function fetchColumn(req: {
+  model: string;
+  prompt: string;
+  pos: number;
+  top_k?: number;
+  jlens?: boolean;
+  rollout?: number;
+}): Promise<ColumnResponse> {
+  const res = await fetch(`${ENGINE_URL}/column`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ top_k: 5, jlens: true, rollout: 0, ...req })

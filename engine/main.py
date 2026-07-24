@@ -22,7 +22,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from lens import lens_report, load_model, pick_device
+from lens import column_report, lens_report, load_model, pick_device
 
 ALLOWED_MODELS = ["gpt2", "gpt2-medium", "gpt2-large", "Qwen/Qwen2.5-0.5B"]
 
@@ -111,6 +111,16 @@ class LensRequest(BaseModel):
     rollout: int = Field(default=0, ge=0, le=64)
 
 
+class ColumnRequest(BaseModel):
+    model: str = DEFAULT
+    prompt: str = Field(min_length=1, max_length=2000)
+    # Column of the (rollout-extended) sequence to compute the ladder at.
+    pos: int = Field(ge=0)
+    top_k: int = Field(default=5, ge=1, le=20)
+    jlens: bool = True
+    rollout: int = Field(default=0, ge=0, le=64)
+
+
 @app.get("/")
 def root():
     return {"service": "trace-lab engine", "health": "/health", "docs": "/docs", "lens": "POST /lens"}
@@ -140,6 +150,29 @@ def lens(req: LensRequest):
     except ValueError as e:
         # A prompt the model can't index (too long / out of vocab). Caught on
         # CPU by _preflight before it could poison the CUDA context.
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+    return {"model": req.model, "prompt": req.prompt, **asdict(report)}
+
+
+@app.post("/column")
+def column(req: ColumnRequest):
+    """The depth ladder (classic bits + J-lens) at one selected column.
+
+    /lens carries the ladder only for the last column; the UIs call this
+    lazily when another column is selected — one forward pass plus, with
+    jlens, one JVP per rung.
+    """
+    model, tok, _device = _get(req.model)
+    try:
+        report = column_report(
+            model, tok, req.prompt, req.pos,
+            top_k=req.top_k, jlens=req.jlens, rollout=req.rollout,
+        )
+    except ValueError as e:
+        # A prompt the model can't index, or pos past the end. Caught on CPU
+        # by _preflight / the range check before it could poison CUDA.
         raise HTTPException(400, str(e))
     except RuntimeError as e:
         raise HTTPException(500, str(e))

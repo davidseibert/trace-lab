@@ -80,8 +80,10 @@ def _topk(probs: torch.Tensor, tok, k: int) -> list[dict]:
     return [{"t": _clean(tok.decode([int(ti)])), "p": float(pi)} for ti, pi in zip(i, p)]
 
 
-def _jvp_transported(model, input_ids: torch.Tensor, block_input: torch.Tensor, layer_idx: int) -> torch.Tensor:
-    """Transport rung ``layer_idx``'s last-position content into the final
+def _jvp_transported(
+    model, input_ids: torch.Tensor, block_input: torch.Tensor, layer_idx: int, pos: int = -1
+) -> torch.Tensor:
+    """Transport rung ``layer_idx``'s content at position ``pos`` into the final
     residual basis: J·h where J = ∂(blocks layer_idx..N-1)/∂rung.
 
     Mirrors the mini-GPT J-lens exactly: J covers only the residual→residual
@@ -90,12 +92,14 @@ def _jvp_transported(model, input_ids: torch.Tensor, block_input: torch.Tensor, 
     strip the radial component that carries the prediction's confidence.
 
     One forward-mode AD pass: a pre-hook swaps the block's incoming hidden
-    state for a dual tensor carrying tangent = its own last-position content;
-    a second pre-hook on the final norm reads the tangent back off its input
-    (= the last block's output, i.e. the pre-norm final residual).
+    state for a dual tensor carrying tangent = the content at ``pos``; a second
+    pre-hook on the final norm reads the tangent back off its input at ``pos``
+    (= the last block's output, i.e. the pre-norm final residual). One seed
+    position per pass is structural: JVPs are linear in the tangent, so seeding
+    several positions at once would sum their transports through attention.
     """
     tangent = torch.zeros_like(block_input)
-    tangent[0, -1] = block_input[0, -1]
+    tangent[0, pos] = block_input[0, pos]
 
     def inject(module, args, kwargs):
         if args:
@@ -109,7 +113,7 @@ def _jvp_transported(model, input_ids: torch.Tensor, block_input: torch.Tensor, 
 
     def capture(module, args):
         _, tan = fwAD.unpack_dual(args[0])
-        captured[0] = None if tan is None else tan[0, -1].detach().clone()
+        captured[0] = None if tan is None else tan[0, pos].detach().clone()
 
     final_norm, _ = _final_norm_and_unembed(model)
     h_inject = _blocks(model)[layer_idx].register_forward_pre_hook(inject, with_kwargs=True)
@@ -138,6 +142,65 @@ class LensReport:
     pred: dict                     # the model's real next-token prediction
     uniform: float                 # log2(vocab) — the knows-nothing reference cost
     n_prompt: int                  # tokens[:n_prompt] are the prompt; the rest are rollout
+
+
+@dataclass
+class ColumnReport:
+    """The depth ladder at one position — what /lens reports for the last
+    column, recomputed for any column the UI selects."""
+    pos: int
+    pred: dict                     # the model's real prediction *after* this column
+    bits: list[float]
+    jbits: list[float] | None
+    jtop: list[list[dict]] | None
+    uniform: float
+
+
+def _ladder(model, tok, input_ids, out, hidden, pos: int, top_k: int, jlens: bool):
+    """Classic bits per rung at ``pos`` — and, if asked, the J-lens decode per
+    rung — both measured against the model's real top-1 prediction at ``pos``
+    (the token that comes after that column)."""
+    final_norm, unembed = _final_norm_and_unembed(model)
+    n = len(hidden)
+
+    final_probs = out.logits[0, pos].float().softmax(-1)
+    pred_id = int(final_probs.argmax())
+    pred = {
+        "token": _clean(tok.decode([pred_id])),
+        "p": float(final_probs[pred_id]),
+        "bits": -math.log(float(final_probs[pred_id])) / LN2,
+    }
+
+    bits: list[float] = []
+    for idx, h in enumerate(hidden):
+        # Same gotcha as the grid: the last hidden state is already normed.
+        normed = h[0, pos] if idx == n - 1 else final_norm(h[0, pos])
+        probs = unembed(normed).float().softmax(-1)
+        bits.append(-math.log(max(float(probs[pred_id]), 1e-30)) / LN2)
+
+    jbits: list[float] | None = None
+    jtop: list[list[dict]] | None = None
+    if jlens:
+        try:
+            jbits, jtop = [], []
+            for idx in range(n):
+                if idx == n - 1:
+                    # Top rung: J = identity, the two lenses agree by construction.
+                    jp = final_probs
+                else:
+                    jh = _jvp_transported(model, input_ids, hidden[idx], idx, pos)
+                    jp = unembed(final_norm(jh)).float().softmax(-1)
+                jbits.append(-math.log(max(float(jp[pred_id]), 1e-30)) / LN2)
+                jtop.append(_topk(jp, tok, top_k))
+        except Exception as e:
+            # The JVP path on some architectures tries to JIT a Triton kernel;
+            # in a slim image with no C compiler that raises. Degrade to the
+            # classic lens (jbits stays null) rather than failing the whole
+            # request. Give the image a compiler to get the J-lens back.
+            jbits, jtop = None, None
+            print(f"[lens] J-lens unavailable ({type(e).__name__}: {e}); classic lens only")
+
+    return pred, bits, jbits, jtop
 
 
 def _preflight(model, input_ids, rollout: int = 0) -> None:
@@ -194,48 +257,51 @@ def lens_report(
     final_norm, unembed = _final_norm_and_unembed(model)
     n = len(hidden)
 
-    final_probs = out.logits[0, -1].float().softmax(-1)
-    pred_id = int(final_probs.argmax())
-    pred = {
-        "token": _clean(tok.decode([pred_id])),
-        "p": float(final_probs[pred_id]),
-        "bits": -math.log(float(final_probs[pred_id])) / LN2,
-    }
-
     grid: list[list[list[dict]]] = []
-    bits: list[float] = []
     for idx, h in enumerate(hidden):
         # The classic gotcha: HF already ran the last hidden state through the
         # final norm — re-normalizing it would corrupt it. Norm only raw rungs.
         normed = h if idx == n - 1 else final_norm(h)
         probs = unembed(normed)[0].float().softmax(-1)  # [seq, vocab]
         grid.append([_topk(probs[p], tok, top_k) for p in range(probs.shape[0])])
-        bits.append(-math.log(max(float(probs[-1, pred_id]), 1e-30)) / LN2)
 
-    jbits: list[float] | None = None
-    jtop: list[list[dict]] | None = None
-    if jlens:
-        try:
-            jbits, jtop = [], []
-            for idx in range(n):
-                if idx == n - 1:
-                    # Top rung: J = identity, the two lenses agree by construction.
-                    jp = final_probs
-                else:
-                    jh = _jvp_transported(model, input_ids, hidden[idx], idx)
-                    jp = unembed(final_norm(jh)).float().softmax(-1)
-                jbits.append(-math.log(max(float(jp[pred_id]), 1e-30)) / LN2)
-                jtop.append(_topk(jp, tok, top_k))
-        except Exception as e:
-            # The JVP path on some architectures tries to JIT a Triton kernel;
-            # in a slim image with no C compiler that raises. Degrade to the
-            # classic lens (jbits stays null) rather than failing the whole
-            # request. Give the image a compiler to get the J-lens back.
-            jbits, jtop = None, None
-            print(f"[lens] J-lens unavailable ({type(e).__name__}: {e}); classic lens only")
+    pred, bits, jbits, jtop = _ladder(model, tok, input_ids, out, hidden, -1, top_k, jlens)
 
     layer_names = ["embed"] + [f"layer {i}" for i in range(n - 2)] + ["final"]
     tokens = [_clean(tok.decode([int(t)])) for t in input_ids[0]]
     return LensReport(tokens=tokens, layers=layer_names, grid=grid, bits=bits,
                       jbits=jbits, jtop=jtop, pred=pred,
                       uniform=math.log2(out.logits.shape[-1]), n_prompt=n_prompt)
+
+
+@torch.no_grad()
+def column_report(
+    model, tok, text: str, pos: int, top_k: int = 5, jlens: bool = True, rollout: int = 0
+) -> ColumnReport:
+    """The depth ladder at column ``pos`` of the (rollout-extended) sequence.
+
+    /lens only carries the ladder for the last column — this recomputes it for
+    any column the UI selects, at the cost of one forward pass plus (with
+    jlens) one JVP per rung. The rollout is re-decoded greedily, so the
+    extended sequence is identical to the one the main request lensed.
+    """
+    device = next(model.parameters()).device
+    enc = tok(text, return_tensors="pt")  # on CPU; validate before touching the GPU
+    input_ids = enc["input_ids"]
+    _preflight(model, input_ids, rollout)
+    input_ids = input_ids.to(device)
+
+    for _ in range(rollout):
+        step = model(input_ids=input_ids).logits[:, -1].argmax(-1, keepdim=True)
+        input_ids = torch.cat([input_ids, step], dim=1)
+
+    seq_len = input_ids.shape[1]
+    if not 0 <= pos < seq_len:
+        raise ValueError(f"pos {pos} is out of range for {seq_len} tokens.")
+
+    out = model(input_ids=input_ids, output_hidden_states=True)
+    pred, bits, jbits, jtop = _ladder(
+        model, tok, input_ids, out, out.hidden_states, pos, top_k, jlens
+    )
+    return ColumnReport(pos=pos, pred=pred, bits=bits, jbits=jbits, jtop=jtop,
+                        uniform=math.log2(out.logits.shape[-1]))

@@ -5,25 +5,32 @@ import { bar, clip, fit, pct } from "../util";
 const TOK_W = 11;
 const PCT_W = 7;
 
+/** The selected column's ladder, as the App resolves it: from /lens at the
+ * last column, lazily fetched from /column elsewhere, null while in flight. */
+export interface Ladder {
+  pred: { token: string; p: number; bits: number };
+  bits: number[];
+  jbits: number[] | null;
+  jtop: TopTok[][] | null;
+}
+
 /**
  * The selected cell, spelled out: what each lens thinks comes next, and what
- * that costs in bits.
- *
- * The J-lens readout only appears at the prediction position — J·h is defined
- * for the last position's content, which is the one the model is actually
- * using to predict.
+ * that costs in bits — for whichever column is selected. The ladder arrives
+ * lazily for non-final columns (one JVP per rung server-side), so it may be
+ * null for a beat after the cursor moves.
  */
 export function Readout(props: {
   resp: LensResponse;
+  ladder: Ladder | null;
   rung: number;
   pos: number;
   width: number;
   height: number;
 }) {
-  const { resp, rung, pos, width, height } = props;
-  const atPred = pos === resp.tokens.length - 1;
+  const { resp, ladder, rung, pos, width, height } = props;
   const classic = resp.grid[rung]?.[pos] ?? [];
-  const transported = resp.jtop && atPred ? resp.jtop[rung] : null;
+  const transported = ladder?.jtop ? ladder.jtop[rung] : null;
 
   // Chrome: the context line, one header per group, one bits line per group,
   // and the model's-answer line at the bottom.
@@ -41,7 +48,7 @@ export function Readout(props: {
     ));
 
   const bitsLine = (bits: number | undefined, fg: string) => {
-    const label = `−log₂ p(${resp.pred.token}) = ${(bits ?? 0).toFixed(2)}b `;
+    const label = `−log₂ p(${ladder?.pred.token ?? "?"}) = ${(bits ?? 0).toFixed(2)}b `;
     return (
       <text>
         <span fg={theme.faint}>{clip(label, width)}</span>
@@ -60,7 +67,7 @@ export function Readout(props: {
         <span fg={theme.faint}>{clip("LOGIT LENS — the rung decoded as-is", width)}</span>
       </text>
       {rows(classic, theme.data)}
-      {atPred ? bitsLine(resp.bits[rung], theme.data) : null}
+      {ladder ? bitsLine(ladder.bits[rung], theme.data) : null}
 
       {transported ? (
         <>
@@ -68,22 +75,24 @@ export function Readout(props: {
             <span fg={theme.faint}>{clip("J-LENS — transported through the rest first", width)}</span>
           </text>
           {rows(transported, theme.model)}
-          {bitsLine(resp.jbits?.[rung], theme.model)}
+          {bitsLine(ladder?.jbits?.[rung], theme.model)}
         </>
-      ) : resp.jtop ? (
+      ) : !ladder ? (
         <text>
-          <span fg={theme.faint}>{clip("J-lens reads at the prediction position — press → to it", width)}</span>
+          <span fg={theme.faint}>{clip("computing this column's ladder…", width)}</span>
         </text>
       ) : null}
 
-      <text>
-        <span fg={theme.faint}>
-          {clip(
-            `answer: ${resp.pred.token} (${(resp.pred.p * 100).toFixed(1)}%, ${resp.pred.bits.toFixed(2)}b) · uniform ${resp.uniform.toFixed(1)}b`,
-            width,
-          )}
-        </span>
-      </text>
+      {ladder ? (
+        <text>
+          <span fg={theme.faint}>
+            {clip(
+              `after this: ${ladder.pred.token} (${(ladder.pred.p * 100).toFixed(1)}%, ${ladder.pred.bits.toFixed(2)}b) · uniform ${resp.uniform.toFixed(1)}b`,
+              width,
+            )}
+          </span>
+        </text>
+      ) : null}
     </box>
   );
 }
