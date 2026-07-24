@@ -24,6 +24,13 @@ from lens import lens_report, load_model, pick_device
 
 ALLOWED_MODELS = ["gpt2", "gpt2-medium", "gpt2-large", "Qwen/Qwen2.5-0.5B"]
 
+# `make tui MODEL=...` / `LENS_MODEL` can name a model that isn't on the list
+# above; honour it as the default and add it, so trying a new architecture
+# needs no code edit. The TUI reads `default` from /health to seed its dropdown.
+DEFAULT = (os.environ.get("LENS_MODEL") or "gpt2").strip() or "gpt2"
+if DEFAULT not in ALLOWED_MODELS:
+    ALLOWED_MODELS.insert(0, DEFAULT)
+
 # Locally-trained models (see train.py) live NEXT TO the HF cache in the shared
 # volume — never inside hub/, which is a download cache keyed by repo revision.
 # They're served as "local/<dirname>" and appear in /health's model list, which
@@ -49,7 +56,7 @@ def _resolve(model_name: str) -> str:
         400, f"unknown model {model_name!r}; allowed: {ALLOWED_MODELS + local_models()}"
     )
 
-app = FastAPI(title="x-mdl engine", version="0.1.0")
+app = FastAPI(title="trace-lab engine", version="0.1.0")
 # The Svelte dev server talks to us cross-origin; this service is loopback-only.
 app.add_middleware(
     CORSMiddleware,
@@ -68,7 +75,7 @@ def _get(model_name: str):
 
 
 class LensRequest(BaseModel):
-    model: str = "gpt2"
+    model: str = DEFAULT
     prompt: str = Field(min_length=1, max_length=2000)
     top_k: int = Field(default=5, ge=1, le=20)
     jlens: bool = True
@@ -76,7 +83,7 @@ class LensRequest(BaseModel):
 
 @app.get("/")
 def root():
-    return {"service": "x-mdl engine", "health": "/health", "docs": "/docs", "lens": "POST /lens"}
+    return {"service": "trace-lab engine", "health": "/health", "docs": "/docs", "lens": "POST /lens"}
 
 
 @app.get("/health")
@@ -89,6 +96,7 @@ def health():
         "device": pick_device(),
         "loaded": list(_cache),
         "models": ALLOWED_MODELS + local_models(),
+        "default": DEFAULT,
     }
 
 
