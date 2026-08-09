@@ -6,8 +6,9 @@
   import GraphApp from './components/GraphApp.svelte';
   import CoderApp from './components/CoderApp.svelte';
   import LogitApp from './components/LogitApp.svelte';
+  import AttentionLabApp from './components/attn/AttentionLabApp.svelte';
 
-  type Lens = 'grammar' | 'morph' | 'morfessor' | 'llm' | 'graph' | 'coder' | 'logit';
+  type Lens = 'grammar' | 'morph' | 'morfessor' | 'llm' | 'attn' | 'graph' | 'coder' | 'logit';
   let lens = $state<Lens>('grammar');
 </script>
 
@@ -21,6 +22,7 @@
       <button class:active={lens === 'morph'} onclick={() => (lens = 'morph')}>Morph·merge</button>
       <button class:active={lens === 'morfessor'} onclick={() => (lens = 'morfessor')}>Morph·split</button>
       <button class:active={lens === 'llm'} onclick={() => (lens = 'llm')}>Mini-GPT</button>
+      <button class:active={lens === 'attn'} onclick={() => (lens = 'attn')}>Attention Lab</button>
       <button class:active={lens === 'graph'} onclick={() => (lens = 'graph')}>Graph·SUBDUE</button>
       <button class:active={lens === 'coder'} onclick={() => (lens = 'coder')}>Coder</button>
       <button class:active={lens === 'logit'} onclick={() => (lens = 'logit')}>Logit·real</button>
@@ -37,6 +39,8 @@
     <MorfessorApp {brand} />
   {:else if lens === 'llm'}
     <LlmApp {brand} />
+  {:else if lens === 'attn'}
+    <AttentionLabApp {brand} />
   {:else if lens === 'graph'}
     <GraphApp {brand} />
   {:else if lens === 'logit'}

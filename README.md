@@ -60,6 +60,7 @@ Each is a way to write, read, or account for structure in bits. See
 | **Graph·SUBDUE** | a labeled graph | collapse a recurring subgraph into one node |
 | **Coder** | a probability stream | arithmetic-code it to literal bits |
 | **Mini-GPT** | a training trace | implant facts, read the residual ladder, J-lens |
+| **Attention Lab** | hand-sized, editable Q/K/V matrices | watch scaled dot-product attention compute, one clickable cell at a time |
 | **Logit·real** | GPT-2 / Qwen | the classic logit lens + J-lens over a real model, in bits |
 
 ## Architecture

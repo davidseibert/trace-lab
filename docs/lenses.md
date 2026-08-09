@@ -301,6 +301,47 @@ of the residual's norm lies in the row space of `∂logits/∂h` (centered, sinc
 softmax ignores uniform shifts). The remainder is blind directions: components
 that carry exactly zero bits about the next token, however large they are.
 
+## Attention Lab lens — Q/K/V worked examples
+
+Where the mini-GPT lens shows attention as one panel among many in a training
+run, Attention Lab isolates the mechanism itself: a **static** forward pass
+through hand-sized, hand-editable matrices, small enough that every number on
+screen can be checked with a calculator. No training, no autograd — the lens
+computes scaled dot-product attention once per edit and shows every stage that
+produced the result.
+
+**Setup.** Up to 6 tokens (typed as plain words — they're just row labels, not
+a vocabulary), `d_model ∈ {2,4,6,8}`, 1 or 2 heads, and a causal-mask toggle.
+The input embeddings `X` and the `Wq`/`Wk`/`Wv` projections are directly
+editable cell-by-cell (`WeightEditor`, forked from `ActGrid`'s layout as an
+input grid); `Wo` is generated alongside them but shown read-only, so the
+lesson stays on Q/K/V rather than the output projection. A `🎲 seed` button
+re-rolls all four with a new seed; an `identity` preset sets
+`Wq = Wk = Wv = Wo = I` so `Q = K = V = X` — useful for seeing raw embedding
+dot products before projections are in the picture.
+
+**Pipeline.** Every stage is rendered as its own panel, per head: `Q`, `K`, `V`
+(the linear projections) → `QKᵀ` (raw scores) → `÷ √head_dim` (scaled) →
+softmax weights (reusing the mini-GPT lens's `AttentionView` arc-diagram +
+per-head-heatmap component) → `weights · V` (per-head output) → `concat` (when
+using 2 heads) → `· Wo` (final output). Causal masking doesn't get its own
+matrix — row `r`'s softmax is computed only over columns `0..r`, so masked-out
+weights are true zeros rather than a `-∞` sentinel that would have to be
+special-cased out of the color scale.
+
+**Cell inspector.** Clicking any cell in a `Scores` or `Attention weights`
+panel (or a heatmap cell in the combined weights view) shows the literal
+arithmetic behind that one number: the dot product term-by-term, the `÷ √d_k`
+scaling, and — unless the cell is causally masked — the softmax weight and
+what fraction of that row's attention it represents.
+
+**Reusing the shared transport.** There's no training run here, so the
+`Player`/`Controls` scrub bar is repurposed as a *query-position* walker
+instead of a *training-step* walker: scrubbing changes which token's row is
+highlighted in the arc diagram (`AttentionView` gained an optional `focusPos`
+prop for this — it defaults to the last token so the mini-GPT lens is
+unaffected). Same shared component, same generic `Player<S>`, a different `S`.
+
 ## Logit·real lens (GPT-2 / Qwen)
 
 The mini-GPT lens's ladder, climbed by a **real model**. A small Python engine

@@ -4,11 +4,17 @@
   let {
     attn,
     tokens,
-    tokenColors
+    tokenColors,
+    focusPos,
+    onCellClick
   }: {
     attn: TensorSnap; // [H, T, T]
     tokens: string[];
     tokenColors: string[];
+    /** Query position the arc diagram fans out from. Defaults to the last token. */
+    focusPos?: number;
+    /** When supplied, per-head heatmap cells become clickable. */
+    onCellClick?: (head: number, row: number, col: number, value: number) => void;
   } = $props();
 
   const H = $derived(attn.shape[0]);
@@ -18,10 +24,11 @@
 
   const at = (h: number, i: number, j: number) => attn.data[h * T * T + i * T + j];
 
-  // Arc diagram: how the LAST token (the one whose next-token we predict)
-  // distributes its attention over earlier tokens, averaged across heads.
+  // Arc diagram: how the focused token distributes its attention over
+  // earlier tokens, averaged across heads. Defaults to the last token (the
+  // one whose next-token we predict).
   const lastRow = $derived.by(() => {
-    const q = T - 1;
+    const q = focusPos ?? T - 1;
     const w: number[] = [];
     for (let j = 0; j < T; j++) {
       let s = 0;
@@ -36,8 +43,9 @@
   const VH = 42;
   const xAt = (i: number) => (T <= 1 ? VW / 2 : 6 + (i / (T - 1)) * (VW - 12));
   const baseY = VH - 8;
+  const focusIdx = $derived(focusPos ?? T - 1);
   function arc(i: number): string {
-    const x0 = xAt(T - 1);
+    const x0 = xAt(focusIdx);
     const x1 = xAt(i);
     const peak = baseY - 6 - Math.abs(x0 - x1) * 0.4;
     const mid = (x0 + x1) / 2;
@@ -46,20 +54,20 @@
 </script>
 
 <div class="attn">
-  <!-- Arc diagram for the last token -->
+  <!-- Arc diagram for the focused token -->
   <svg class="arcs" viewBox="0 0 {VW} {VH}" preserveAspectRatio="none" role="presentation">
     {#each lastRow as w, j}
-      {#if j < T - 1 && w > 0.01}
+      {#if j !== focusIdx && w > 0.01}
         <path d={arc(j)} class="arc" style="stroke:{tokenColors[j]}; stroke-opacity:{Math.min(1, 0.15 + w)}; stroke-width:{(0.4 + w * 3).toFixed(2)}" />
       {/if}
     {/each}
     {#each tokens as _, j}
-      <circle cx={xAt(j)} cy={baseY} r="1.6" class="node" class:q={j === T - 1} />
+      <circle cx={xAt(j)} cy={baseY} r="1.6" class="node" class:q={j === focusIdx} />
     {/each}
   </svg>
   <div class="arc-labels">
     {#each tokens as t, j}
-      <span class="alab mono" class:q={j === T - 1} style="color:{tokenColors[j]}">{t}</span>
+      <span class="alab mono" class:q={j === focusIdx} style="color:{tokenColors[j]}">{t}</span>
     {/each}
   </div>
 
@@ -72,11 +80,22 @@
           {#each idx as i}
             {#each idx as j}
               {@const w = at(h, i, j)}
+              {@const clickable = !!onCellClick && j <= i}
               <div
                 class="hcell"
                 class:masked={j > i}
+                class:clickable
                 style="background:rgba(91,156,255,{j > i ? 0 : (0.05 + 0.95 * w).toFixed(3)})"
                 title={`${tokens[i]} → ${tokens[j]} : ${(w * 100).toFixed(0)}%`}
+                role={clickable ? 'button' : undefined}
+                tabindex={clickable ? 0 : undefined}
+                onclick={() => clickable && onCellClick?.(h, i, j, w)}
+                onkeydown={(e) => {
+                  if (clickable && (e.key === 'Enter' || e.key === ' ')) {
+                    e.preventDefault();
+                    onCellClick?.(h, i, j, w);
+                  }
+                }}
               ></div>
             {/each}
           {/each}
@@ -102,4 +121,6 @@
   .hmap { display: grid; gap: 1px; aspect-ratio: 1 / 1; background: var(--bg-2); padding: 2px; border-radius: 4px; }
   .hcell { border-radius: 1px; min-height: 0; }
   .hcell.masked { background: transparent !important; }
+  .hcell.clickable:not(.masked) { cursor: pointer; }
+  .hcell.clickable:not(.masked):hover { outline: 1.5px solid var(--text); outline-offset: -1.5px; }
 </style>
