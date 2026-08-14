@@ -1,275 +1,123 @@
-# MDL Explorer
+# trace·lab
 
-An interactive, introspective sandbox for building deep intuition about the
-**Minimum Description Length** principle.
+An interactive, introspective sandbox for building deep intuition about
+**description length** — how many bits it costs to describe your data, and why
+the model that predicts best is the model that compresses best.
 
 > **total = L(M) + L(D | M)** — the best model of your data is the one that lets
 > you describe the model *and* the data-given-the-model in the fewest total bits.
-> A model too simple makes `L(D|M)` huge; too complex makes `L(M)` huge. MDL
-> finds the trough — and never overfits, because complexity literally costs bits.
+> Too simple makes `L(D|M)` huge; too complex makes `L(M)` huge. MDL finds the
+> trough — and never overfits, because complexity literally costs bits.
+
+Every lens turns some corner of that idea into a **falling bits curve** you can
+scrub: a RePair grammar, morphology, a SUBDUE graph, an arithmetic coder, a
+mini-GPT you can train and do fact-surgery on, and the **logit lens** over real
+GPT-2 / Qwen — the same `−log₂ p` axis under all of them. *Prediction is
+compression;* the lenses are that sentence, made tangible.
+
+## Two front-ends, one engine
+
+The same lens payload drives two clients — pick your habitat:
+
+- **web/** — a Svelte sandbox: every lens, with a shared transport (play, step,
+  scrub) over an immutable trace. Runs standalone for everything except the
+  real-model lenses. Hash-routed: `#/` is a card index grouped into three
+  tiers — **instruments** (open-ended workbenches over real models, engine
+  required), **toy models** (hand-sized neural nets), and **concepts** (closed
+  theory exhibits) — and each lens keeps its settings (prompt, seed,
+  temperature, toggles) in its URL, so a refresh keeps your state and a copied
+  link is a reproduction recipe.
+- **tui/** — an [OpenTUI](https://github.com/anomalyco/opentui) terminal
+  front-end for the real-model logit lens / J-lens. A native-terminal grid of
+  per-layer predictions, shaded by confidence.
+- **engine/** — a FastAPI + torch service both talk to over HTTP. Models load
+  once and stay resident, so switching models mid-session is free.
 
 ## Run
 
-```bash
-bun install
-bun run dev      # http://localhost:5180
-```
+Everything is wrapped in a `Makefile` (`make help` lists it):
 
-`bun run check` type-checks; `bun run build` produces a production bundle.
+| command | what it does |
+|---|---|
+| `make up` | web + engine (GPU) → http://localhost:5180, engine on :5181 |
+| `make up-cpu` | same on CPU (slower J-lens, no GPU needed) |
+| `make web` | just the Svelte sandbox — every lens except the real-model one |
+| `make tui` | the OpenTUI terminal front-end (brings the GPU engine up first) |
+| `make smoke` | one-shot bits-ladder sanity check (`PROMPT="…"`, `MODEL=…` to override) |
+| `make train` | train a 1.2M-param GPT-2 on 2-digit addition into the shared volume |
+| `make build` / `make down` / `make clean` | build images / stop / also remove images |
 
-## What it does (string grammar lens)
+Without Docker: `cd web && bun install && bun run dev` (sandbox on :5180);
+`cd engine && uv sync && uv run uvicorn main:app --port 5181` (engine, needs a
+working CUDA/PyTorch); `cd tui && bun install && bun run start` (terminal client;
+`LENS_ENGINE` points it elsewhere).
 
-Feed it a string. It runs a RePair-style greedy search: repeatedly name the
-adjacent digram whose abbreviation removes the most bits, replace every
-occurrence with a new rule symbol, and watch longer structures (`"the "`) emerge
-as a hierarchy of rules.
+## The lenses
 
-The whole search is computed up front as an immutable trace; the UI is a pure
-function of the current step. So you get a **debugger**:
+Each is a way to write, read, or account for structure in bits. See
+**[docs/lenses.md](docs/lenses.md)** for how each one works.
 
-- ▶ play / pause, step forward/back, scrub, and slow-motion speeds
-- live **L(M) vs L(D|M)** breakdown with a shrinking stacked bar
-- the description-length **evolution chart** (click to seek)
-- the **candidate table**, ranked by Δbits — and it flags when MDL's pick differs
-  from the merely most-frequent digram (frequency ≠ best compression)
-- a **uniform log₂(V)** vs **Shannon −log₂(p)** code toggle, and a
-  model-of-model **overhead** toggle — both change the decisions MDL makes
+| lens | data | the move |
+|---|---|---|
+| **Grammar** | a string | name the digram that saves the most bits (RePair) |
+| **Morph·merge** | a weighted word list | merge morphs within a word (BPE-style) |
+| **Morph·split** | the same word list | re-segment from whole words (Morfessor) |
+| **Graph·SUBDUE** | a labeled graph | collapse a recurring subgraph into one node |
+| **Coder** | a probability stream | arithmetic-code it to literal bits |
+| **Mini-GPT** | a training trace | implant facts, read the residual ladder, J-lens |
+| **Attention Lab** | hand-sized, editable Q/K/V matrices | watch scaled dot-product attention compute, one clickable cell at a time |
+| **Logit·real** | GPT-2 / Qwen | the classic logit lens + J-lens over a real model, in bits |
+| **Reason·trace** | Qwen3-0.6B thinking traces | stream a reasoning trace live, per-token bits ladder as it's born — reasoning as compression |
+| **Train·real** | the tiny addition GPT-2 | train it live on the engine (same run as `make train`); the checkpoints land in Logit·real's model picker |
 
 ## Architecture
 
-| Path | Role |
+A new domain = one `MdlProblem` adapter; the engine, player, and most of the UI
+come for free.
+
+| path | role |
 |------|------|
-| `src/lib/mdl/types.ts` | Domain-agnostic MDL contracts (`MdlProblem`, `Step`, `CostBreakdown`) |
-| `src/lib/mdl/engine.ts` | `trace()` — greedy search → immutable snapshot list |
-| `src/lib/string/grammar.ts` | String lens: digram grammar, uniform + Shannon costs |
-| `src/lib/morphology/morphology.ts` | Morphology lens: word-bounded, frequency-weighted morph lexicon |
-| `src/lib/graph/graph.ts` | Graph lens: SUBDUE substructure compression (`canon.ts`, `match.ts`, `layout.ts`) |
-| `src/lib/coder/arithmetic.ts` | Coder lens: model-agnostic arithmetic encode/decode (`coder.ts` builds the streams) |
-| `src/lib/player.svelte.ts` | Playback (index into the trace) |
-| `src/components/*` | CostPanel, CostChart, CandidatesTable, Controls (shared) + per-lens views |
+| `web/src/lib/lenses.ts` | the lens registry — id, tier, blurb, cross-links; nav, router, and index all read it |
+| `web/src/lib/router.svelte.ts` | hash router + settings-in-URL sync (`#/<lens>?…`) |
+| `web/src/lib/guides.ts` | the ✓/✗ "How to read this" content every lens mounts |
+| `web/src/lib/mdl/` | domain-agnostic MDL contracts + the greedy `trace()` runner |
+| `web/src/lib/*/` | per-lens adapters (grammar, morphology, graph, coder, llm) |
+| `web/src/lib/player.svelte.ts` | playback: an index into the immutable trace |
+| `web/src/components/` | shared transport + cost/candidate panels, plus per-lens views |
+| `engine/lens.py` | the real-model logit lens + J-lens (plain `transformers`) |
+| `engine/main.py` | the FastAPI service (`/health`, `/lens`, `/column`, SSE `/chat`, `/attn`, `/ablate`, SSE `/train`) |
+| `tui/src/` | the OpenTUI front-end (talks to the engine over HTTP) |
+| `tui/src/spectate.ts` | read-only sidecar in the TUI: `/state` + `/screen` on :5182 |
+| `mcp/server.ts` | MCP bridge — lets Claude Code spectate the TUI + query the engine |
 
-A new domain = implement one `MdlProblem` adapter; the engine, player, and most
-of the UI come for free. Lenses sharing this spine today: grammar, morphology
-(merge), a SUBDUE graph lens — and, with their own bespoke loops, the Morfessor
-split lens and a mini-GPT training trace.
+## Spectating from Claude Code (MCP)
 
-## Morphology lens
+`.mcp.json` registers a `trace-lab` MCP server (`mcp/server.ts`, runs under
+bun — `cd mcp && bun install` once). While the TUI is running, Claude can see
+exactly what you see and run its own experiments alongside:
 
-Feed it a **word list with frequencies** (`walking 8`). Every word starts spelled
-out as characters; greedy MDL repeatedly joins the morph pair whose merge saves
-the most bits — but only *within* a word, and weighted by how often the word
-occurs. Shared stems (`walk`, `talk`) and affixes (`ing`, `ed`, `un‑`) emerge
-because they recur across the vocabulary and so repay their lexicon entry many
-times over in the corpus. Same engine, player, cost panel, and candidate table
-as the grammar lens — only the data shape (a weighted word set) and the
-word-bounded counting differ.
+| tool | what it does |
+|---|---|
+| `get_screen` | the TUI's current frame, as literal text |
+| `get_state` | model/prompt/selection + the selected column's bits ladder |
+| `get_grid` | the full layer × position lens grid (top-k per cell) |
+| `query_lens` / `query_column` | run any prompt against the engine directly, without touching your view |
+| `engine_health` | device, available/resident models, sidecar reachability |
 
-This is the *agglomerative* variant (RePair/BPE over a weighted word list). It is
-Morfessor in spirit — two-part MDL over a morph lexicon — but not in mechanism:
-canonical Morfessor Baseline starts from whole words and recursively splits,
-revisiting earlier cuts. That recursive-split engine is the **split** lens below.
+The TUI serves this through a read-only HTTP sidecar on **:5182**
+(`tui/src/spectate.ts`; `TUI_SPECTATE_PORT=0` disables it). `make tui` passes
+`--service-ports` so the container publishes it; the MCP server reads
+`TUI_SPECTATE` / `LENS_ENGINE` to find the sidecar and engine elsewhere.
 
-## Morphology — phase 2 (Morfessor split)
+## Model weights
 
-The same word list, optimized from the **opposite extreme**. Every word starts as
-a single whole-word morph (lexicon huge, corpus tiny — one token per word); the
-algorithm then re-segments words to share structure, the mirror image of the
-merge lens. Watching both converge on the same data from opposite ends is the
-lesson.
+Weights live in the **`hf-cache` named Docker volume**, shared with
+[x-logit-lens](../x-logit-lens) — both compose files pin `name: hf-cache`
+(`external`, so compose can never delete it, not even `down -v`), so each model
+downloads once across both projects and loads fast (the volume lives inside the
+WSL2 VM). The Makefile creates it on first use; inspect it with
+`docker run --rm -v hf-cache:/v alpine du -sh /v/hf`.
 
-This lens needs a **different engine**, and the reason is instructive — it's the
-scaling caveat from the merge lens turned structural:
-
-- **The move is a re-segmentation, scored against live global counts.** Re-analysing
-  one word means pulling it out of the corpus and choosing the segmentation that
-  minimizes the *total* cost given every other word as-is. Because the corpus code
-  is `−log₂ p` over morph tokens, a word's best cut depends on the whole model — so
-  the engine maintains incremental morph counts (`remove`/`add`/`reanalyse`) rather
-  than recomputing a global cost per candidate.
-- **It loops in epochs, not a single argmin.** It sweeps the word list, re-analysing
-  each word, until a full pass changes nothing. Because "keep the current cut" is
-  always a candidate, every step is non-increasing, so the trace is a clean
-  descending staircase that still shows *re-analysis*: a word can flip its cut in a
-  later epoch because other words moved the counts beneath it. That breaks the merge
-  engine's "one global best move per step" invariant — hence a separate loop.
-- **What stays free:** the `Step[]` trace, `Player`, transport, panels, cost panel,
-  and evolution chart all apply unchanged. Only the search loop and the
-  count-maintenance differ.
-
-Words are short, so each re-analysis enumerates every segmentation and scores it by
-the exact cost — correct by construction, no approximation (the classic recursive
-`O(n²)` splitter is just an optimization we don't need at this scale).
-
-## Graph lens (SUBDUE)
-
-Feed it a **directed, labeled graph** as an edge list (`a:Person b:Movie WATCHED`).
-This is the grammar lens lifted from a sequence to a graph: instead of naming a
-recurring *digram*, it discovers a recurring connected *subgraph* — a triangle, a
-ring, a motif — names it, and collapses every non-overlapping (vertex-disjoint)
-instance into a single composite node. The folded pattern lives once in the
-**substructure dictionary** (that is `L(M)`); the graph that remains is `L(D|M)`.
-Adding a substructure grows the dictionary but shrinks the graph — the same MDL
-trough, now over a structurally richer object. This is SUBDUE.
-
-A composite node carries a substructure symbol, so a later substructure can
-contain an earlier one: the dictionary composes hierarchically, exactly as
-grammar builds `"the"` from `(t,h)+e`. The candidates table makes the lesson
-sharper than in the string lens — a **large, rarer** substructure can out-compress
-a **small, frequent** one, so MDL's pick and the most-frequent pick diverge more
-often. Same engine, player, cost panel, candidate table, and evolution chart as
-the other lenses; only the data shape (nodes/edges) and the move (collapse a
-subgraph) differ.
-
-Notably, this lens needs **no custom engine** — unlike Morfessor and the Mini-GPT
-lens. It implements the same `MdlProblem` adapter the grammar lens does and rides
-the generic `trace()` runner unchanged; the SUBDUE beam (canonical labeling +
-connected-subgraph enumeration + vertex-disjoint instance selection) all happens
-inside `candidates()`. That is the strongest evidence yet for the README's thesis:
-*a new domain = one adapter.*
-
-Matching is on **labels *and* structure**, not shape alone. Two samples make this
-concrete: a **dependency-grammar** graph where the noun phrase (`N←det D`,
-`N←amod A`) emerges as a substructure and the clause (`V` with subject- and
-object-NPs) then composes on top of it — linguistic constituency falling out of
-compression — and a **kinship** graph where a two-son family and a two-daughter
-family are the *same shape* but stay *distinct* substructures because sex (M/F) is
-part of the match. The all-`o` triangle samples, by contrast, are the graph
-equivalent of compressing `aaaaaa`: pure structure, labels carrying nothing.
-
-It is deliberately **toy-scale** (≤ ~40 nodes): subgraph isomorphism is
-exponential, so pattern size and the candidate beam are bounded, and an induced
-subgraph (a chunk you literally cut out) defines an instance. Node positions come
-from a seeded, deterministic force layout computed once over the base graph, with
-composites placed at the centroid of their constituents — so nothing jumps as you
-scrub.
-
-## Coder lens (arithmetic coding)
-
-Every other lens ends by reducing a model to a per-symbol cost of `−log₂ p` bits.
-The coder lens is the **operational back-end** that turns such a probability stream
-into an actual interval-narrowing encode/decode round-trip — it makes the
-fractional bits *visible* as a literal binary codeword you can decode back.
-
-The contract is deliberately model-agnostic. A `CodeStream` is just an ordered list
-of *(distribution at this step, which symbol was emitted)*. The arithmetic core
-never asks where the distribution came from:
-
-- **Static sources** — `uniform` (`p = 1/V`), `empirical` (Shannon, `p = count/T`),
-  and `grammar` — repeat the **same** distribution every step.
-- **A context source** — the Mini-GPT lens — varies the distribution **every step**,
-  because position *i*'s softmaxed logits *are* `P(xᵢ₊₁ | x≤ᵢ)`.
-
-Same `encode()`/`decode()` handles both. That single fact is the punchline of the
-whole app: **prediction *is* compression.** See "The LLM connection" below.
-
-### How a symbol narrows the interval (encode)
-
-Encoding keeps a live interval `[lo, hi)` inside `[0, 1)`. Each symbol carves out
-the sub-slice whose width is its probability `p`, and that slice becomes the new
-interval. The *offset* of the slice is the **cumulative mass before** the symbol:
-
-```
-width   = hi − lo
-newLo   = lo + width · cumLo      // cumLo = Σ p of symbols before this one
-newHi   = lo + width · cumHi      // cumHi = cumLo + p
-```
-
-After all symbols, the interval width equals `Π p = 2^(−Σ −log₂ p)` — the ideal
-bit cost — and **any** number inside it names the message. We emit the
-fewest-bit binary fraction in the interval (`shortestCodeword`).
-
-**Worked encode — `"CAB"` over a uniform alphabet `{A,B,C,D}` (`p = ¼` each).**
-The four bands of `[0,1)` are `A=[0,.25)`, `B=[.25,.5)`, `C=[.5,.75)`, `D=[.75,1)`:
-
-| step | symbol | interval before | width | symbol's band `[cumLo,cumHi)` | interval after |
-|------|--------|-----------------|-------|-------------------------------|----------------|
-| 1 | C | `[0, 1)` | 1 | `[0.5, 0.75)` | `[0.5, 0.75)` |
-| 2 | A | `[0.5, 0.75)` | 0.25 | `[0, 0.25)` | `[0.5, 0.5625)` |
-| 3 | B | `[0.5, 0.5625)` | 0.0625 | `[0.25, 0.5)` | `[0.515625, 0.53125)` |
-
-Final width `= 1/64`, so the ideal cost is `−log₂(1/64) = 6` bits (three symbols ×
-`log₂4` = 2 bits each, as expected for a uniform quaternary source). The shortest
-dyadic fraction inside `[0.515625, 0.53125)` is `33/64 = 0.515625`, i.e. the
-**codeword `0.100001₂`** — six bits.
-
-### How one number replays every offset (decode)
-
-This is the part that feels like magic: the decoder is handed **one number** (the
-codeword) plus the symbol count, and recovers every symbol *and* every offset. The
-trick is that it never changes the number — it changes its *view* of the number.
-At each step it renormalizes the codeword into the current window:
-
-```
-x = (value − lo) / width        // where the codeword sits within [lo, hi), as a point in [0,1)
-```
-
-Then it walks the cumulative bands of *this step's* distribution and emits whichever
-band contains `x` — that lookup *is* the offset. It then narrows `[lo, hi)` to that
-band (identical arithmetic to encode) and repeats. The window zooms in on the fixed
-point until each symbol is forced.
-
-**Worked decode — codeword `0.100001₂ = 0.515625`, told the message has 3 symbols,**
-same `{A,B,C,D}` bands:
-
-| step | interval before | width | `x = (value−lo)/width` | lands in band | emit | interval after |
-|------|-----------------|-------|------------------------|---------------|------|----------------|
-| 1 | `[0, 1)` | 1 | `0.515625` | C `[0.5, 0.75)` | **C** | `[0.5, 0.75)` |
-| 2 | `[0.5, 0.75)` | 0.25 | `0.015625 / 0.25 = 0.0625` | A `[0, 0.25)` | **A** | `[0.5, 0.5625)` |
-| 3 | `[0.5, 0.5625)` | 0.0625 | `0.015625 / 0.0625 = 0.25` | B `[0.25, 0.5)` | **B** | `[0.515625, 0.53125)` |
-
-Out comes `"CAB"` — the round-trip closes. Notice the single number `0.515625` was
-re-projected to `0.515625`, then `0.0625`, then `0.25`: the *same* point, seen
-through three successively magnified windows. That re-projection is the answer to
-"where do the offsets come from."
-
-### Unequal bands, fractional bits
-
-When `p` is not `1/V` the bands have **unequal widths** — and that is the only thing
-that changes for a skewed or context source. Encode `"ab"` with `p(a)=0.6, p(b)=0.4`
-(bands `a=[0,0.6)`, `b=[0.6,1)`):
-
-| step | symbol | interval before | width | band `[cumLo,cumHi)` | interval after |
-|------|--------|-----------------|-------|----------------------|----------------|
-| 1 | a | `[0, 1)` | 1 | `[0, 0.6)` | `[0, 0.6)` |
-| 2 | b | `[0, 0.6)` | 0.6 | `[0.6, 1)` | `[0.36, 0.6)` |
-
-Ideal cost `= −log₂0.6 − log₂0.4 ≈ 0.74 + 1.32 = 2.06` bits — a **fractional** total
-no per-symbol integer code (≥ 1 bit per symbol) could reach. The shortest codeword
-in `[0.36, 0.6)` is `0.5 = 0.10₂`, two bits.
-
-> **A subtlety worth knowing:** the codeword can come out as short as — occasionally
-> a hair under — `⌈Σ −log₂ p⌉`, because `decode()` is *told* the symbol count (it
-> loops exactly `stream.length` times); the code is not self-delimiting. Charge for
-> the length too and you are back above the Shannon bound. Over a long stream the gap
-> vanishes and the codeword length → `Σ −log₂ p`. (Float64 intervals stay exact only
-> to ~52 bits, so the lens caps the coded prefix — `MAX_CHARS` / `MAX_BITS` in
-> `coder.ts` — to keep the round-trip exact and legible.)
-
-### The LLM connection
-
-This is why the encoder/decoder "also fits" the Mini-GPT lens — it was never a
-coincidence. An LLM is a probabilistic model: at each position it emits
-`P(next token | context)`. Feed that stream to the coder and the band widths simply
-change every step instead of staying fixed. Nothing else differs.
-
-And the total it costs is exactly the master equation's data term:
-
-```
-codeword length  ≈  Σᵢ −log₂ P(xᵢ | x<ᵢ)  =  L(D | M)  =  the model's cross-entropy loss (in bits)
-```
-
-All three are the *same number*. So an LLM does not "have a codeword" on its own — a
-codeword is for a **(model + one specific sequence)** pair: the LLM is the shared
-codebook both encoder and decoder hold, and arithmetic coding turns it plus a
-sequence into literal bits. Training the LLM to lower its loss is, exactly, training
-it to compress. (`llmStream` codes token 0 under a uniform `log₂V`-bit prior, since
-the model has no left context to predict the first token, then rides the model's own
-distribution for every token after.)
-
-## Roadmap
-
-- **Speed (only if real vocabularies are loaded)** — the merge lens scores
-  candidates by a full `cost(apply(...))` recompute; both code modes admit an exact
-  `O(1)` delta (`L = T·log₂T − Σ f·log₂f` localizes a merge to a few frequencies).
-  Worth adding behind a dev-time equality assertion against `cost()`; unnecessary
-  for toy inputs.
+`WEB_PORT=5199 make up` remaps the web port if something squats on 5180. The
+engine's host port must stay 5181 (the browser calls it directly) unless you
+also set `VITE_ENGINE_URL`.

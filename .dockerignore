@@ -1,0 +1,9 @@
+**/node_modules
+web/.svelte-kit
+dist
+data
+.git
+.claude
+REFERENCE
+engine/.venv
+**/__pycache__

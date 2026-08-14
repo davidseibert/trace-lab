@@ -1,4 +1,11 @@
 node_modules
 REFERENCE
 dist
+web/.svelte-kit
 .claude
+.venv
+__pycache__
+data
+.claude/settings.local.json
+NUL
+.env

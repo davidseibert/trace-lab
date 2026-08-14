@@ -1,0 +1,19 @@
+[project]
+name = "trace-lab-engine"
+version = "0.1.0"
+description = "Real-model logit-lens / J-lens engine service for the Logit·real lens"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "transformers>=4.44",
+    "torch>=2.6",
+]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true

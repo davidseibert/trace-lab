@@ -1,0 +1,135 @@
+name: trace-lab
+
+x-common:
+  gpu-mode: &gpu-mode
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+  # Model weights live in the shared named volume (see `volumes:` at the
+  # bottom) — inside the WSL2 VM, so loads are fast, and shared with
+  # x-logit-lens, so each model downloads once across both projects.
+  data-mount: &data-mount
+    volumes:
+      - hf-cache:/app/data
+  engine-env: &engine-env
+    HF_HOME: /app/data/hf            # cache model downloads under ./data so they persist
+    LENS_MODEL: ${LENS_MODEL:-gpt2}  # smoke default + the web/TUI default; the web UI picks per request
+    TF_ENABLE_ONEDNN_OPTS: 0
+    # Weights may be cached, but `from_pretrained` still pings the Hub each
+    # launch to confirm the revision -- anonymously, hence the "unauthenticated
+    # requests" warning. Set HF_TOKEN (a `.env` file works) to authenticate, or
+    # HF_HUB_OFFLINE=1 to skip the check for models you've already pulled.
+    HF_TOKEN: ${HF_TOKEN:-}
+    HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}
+  engine-watch: &engine-watch
+    watch:
+      - action: sync+restart
+        path: engine
+        target: /app
+  # So `make tui` waits for uvicorn to be listening instead of racing it -- a
+  # TUI that starts a second early just shows "engine offline".
+  engine-health: &engine-health
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5181/health')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+
+# NOTE: engine-cpu and engine-gpu are spelled out separately on purpose --
+# `extends` merges the `profiles` list, which would make the gpu service also
+# match `--profile cpu` and start both containers (they'd fight over the port).
+
+services:
+  # The Svelte sandbox. No profile: it starts with either engine flavor.
+  # WEB_PORT matters on hosts where something else squats on 5180.
+  web:
+    build:
+      context: .
+      target: web
+    ports:
+      - "${WEB_PORT:-5180}:5180"
+    develop:
+      watch:
+        - action: sync
+          path: web/src
+          target: /app/src
+        - action: sync
+          path: web/index.html
+          target: /app/index.html
+
+  # Real-model lens service (FastAPI + torch). The browser talks to it directly
+  # on localhost:5181, so the port mapping must stay 5181 unless VITE_ENGINE_URL
+  # is changed to match. The TUI reaches it by service name over the network.
+  engine-gpu:
+    profiles: [gpu]
+    build:
+      context: .
+      target: engine
+    environment: *engine-env
+    ports:
+      - "5181:5181"
+    develop: *engine-watch
+    <<: [*gpu-mode, *data-mount, *engine-health]
+
+  engine-cpu:
+    profiles: [cpu]
+    build:
+      context: .
+      target: engine
+    environment: *engine-env
+    ports:
+      - "5181:5181"
+    develop: *engine-watch
+    <<: [*data-mount, *engine-health]
+
+  # OpenTUI front-end -- interactive poking. No CUDA and no model cache in this
+  # container; it reaches the engine by service name over the compose network.
+  # Needs a TTY, so use `docker compose run` (not `up`); `make tui` wraps it and
+  # brings the engine up first. No `depends_on` on purpose: the engine services
+  # are profile-gated (gpu/cpu), which a bare `run tui` can't resolve, and the
+  # engine's lifecycle is managed separately anyway -- the TUI just connects.
+  # Defaults to the GPU engine; LENS_ENGINE=http://engine-cpu:5181 to point at
+  # a CPU one you brought up yourself.
+  tui:
+    profiles: [tui]
+    build:
+      context: .
+      target: tui
+    environment:
+      LENS_ENGINE: ${LENS_ENGINE:-http://engine-gpu:5181}
+      # The spectate sidecar (tui/src/spectate.ts) must bind all interfaces for
+      # the port mapping to reach it; the MCP bridge on the host reads it at
+      # 127.0.0.1:5182. `compose run` skips port mappings unless given
+      # --service-ports, which `make tui` passes.
+      TUI_SPECTATE_HOST: 0.0.0.0
+    ports:
+      - "${TUI_SPECTATE_PORT:-5182}:5182"
+    stdin_open: true
+    tty: true
+
+  # One-shot CLI: `make smoke` (bits-ladder sanity check) and `make train`
+  # (trains checkpoints into the shared volume) both run through this service.
+  smoke:
+    profiles: [smoke]
+    build:
+      context: .
+      target: engine
+    environment: *engine-env
+    command: ["python", "smoke.py"]
+    <<: [*gpu-mode, *data-mount]
+
+volumes:
+  hf-cache:
+    # Fixed name on purpose: it opts out of compose's per-project prefixing so
+    # x-logit-lens can mount the SAME volume (its compose declares the same
+    # name). `external` means compose never creates or deletes it — even
+    # `down -v` can't take the shared model cache with it. The Makefile runs
+    # an idempotent `docker volume create hf-cache` before anything needs it.
+    name: hf-cache
+    external: true
