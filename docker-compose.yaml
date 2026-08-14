@@ -114,14 +114,14 @@ services:
     tty: true
 
   # One-shot CLI: `make smoke` (bits-ladder sanity check) and `make train`
-  # (trains checkpoints into the shared volume) both run through this service.
+  # (trains checkpoints into the shared volume) both run through this service,
+  # each passing its own command to `compose run`.
   smoke:
     profiles: [smoke]
     build:
       context: .
       target: engine
     environment: *engine-env
-    command: ["python", "smoke.py"]
     <<: [*gpu-mode, *data-mount]
 
 volumes:

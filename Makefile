@@ -1,7 +1,9 @@
 COMPOSE := docker compose
 ALL_PROFILES := --profile gpu --profile cpu --profile tui --profile smoke
 
-# Model for `make smoke`; override per-invocation, e.g. `make smoke MODEL=gpt2-large`
+# Exported to EVERY target as LENS_MODEL: sets the engine's default model for
+# `make up`/`make tui` as well as the model `make smoke` checks. Override
+# per-invocation, e.g. `make smoke MODEL=gpt2-large`.
 MODEL ?= gpt2
 export LENS_MODEL := $(MODEL)
 

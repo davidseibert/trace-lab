@@ -25,10 +25,16 @@
  *               Closer to what actual compressors achieve.
  */
 
-import type { CostBreakdown, MdlProblem, ScoredMove } from '../mdl/types';
+import type { CodeMode, CostBreakdown, MdlProblem, ScoredMove } from '../mdl/types';
 import { fmt, surprisal, uniformBits } from '../mdl/format';
+import {
+  vocabSize,
+  expandVisible,
+  replaceDigram,
+  token as symToken
+} from '../mdl/symbols';
 
-export type CodeMode = 'uniform' | 'shannon';
+export type { CodeMode };
 
 export interface GrammarConfig {
   codeMode: CodeMode;
@@ -68,54 +74,34 @@ export const defaultConfig: GrammarConfig = {
 };
 
 // ---------------------------------------------------------------------------
-// Symbol helpers
+// Symbol helpers — the shared algebra in ../mdl/symbols, identical to the
+// morphology lens's (same integer symbol space, same rule shape). Re-exported
+// so this lens's public API is unchanged.
 // ---------------------------------------------------------------------------
 
-export const vocabSize = (m: GrammarModel): number =>
-  m.terminals.length + m.rules.length;
-
-export const isTerminal = (m: GrammarModel, id: number): boolean =>
-  id < m.terminals.length;
-
-export const ruleIndexOf = (m: GrammarModel, id: number): number =>
-  id - m.terminals.length;
+export {
+  vocabSize,
+  isTerminal,
+  ruleIndexOf,
+  showChar,
+  expand,
+  expandVisible,
+  replaceDigram
+} from '../mdl/symbols';
 
 /** Printable token for a symbol id: the char itself, or "R{k}". */
-export function token(m: GrammarModel, id: number): string {
-  if (isTerminal(m, id)) return showChar(m.terminals[id]);
-  return `R${ruleIndexOf(m, id)}`;
-}
-
-/** Render a single character visibly (spaces and newlines made explicit). */
-export function showChar(ch: string): string {
-  if (ch === ' ') return '␣';
-  if (ch === '\n') return '⏎';
-  if (ch === '\t') return '⇥';
-  return ch;
-}
-
-/** Fully expand a symbol id to its underlying terminal string. */
-export function expand(m: GrammarModel, id: number, memo = new Map<number, string>()): string {
-  if (isTerminal(m, id)) return m.terminals[id];
-  const cached = memo.get(id);
-  if (cached !== undefined) return cached;
-  const rule = m.rules[ruleIndexOf(m, id)];
-  const s = expand(m, rule.rhs[0], memo) + expand(m, rule.rhs[1], memo);
-  memo.set(id, s);
-  return s;
-}
-
-/** Visible expansion (spaces/newlines made explicit) for display. */
-export const expandVisible = (m: GrammarModel, id: number): string =>
-  [...expand(m, id)].map(showChar).join('');
+export const token = (m: GrammarModel, id: number): string => symToken(m, id, 'R');
 
 // ---------------------------------------------------------------------------
-// Digram counting + replacement (non-overlapping, left-to-right)
+// Digram counting (non-overlapping, left-to-right)
 // ---------------------------------------------------------------------------
 
 const key = (a: number, b: number): string => `${a},${b}`;
 
-/** Count non-overlapping occurrences of every adjacent digram. */
+/** Count non-overlapping occurrences of every adjacent digram.
+ *  Non-overlapping counting matters for the math: replaceDigram scans the same
+ *  greedy left-to-right way, so a digram counted n times shrinks the sequence
+ *  by exactly n symbols (each occurrence 2 → 1). */
 export function countDigrams(seq: number[]): Map<string, { a: number; b: number; n: number }> {
   const counts = new Map<string, { a: number; b: number; n: number }>();
   let i = 0;
@@ -134,22 +120,6 @@ export function countDigrams(seq: number[]): Map<string, { a: number; b: number;
     }
   }
   return counts;
-}
-
-/** Replace every non-overlapping occurrence of digram (a,b) with newId. */
-export function replaceDigram(seq: number[], a: number, b: number, newId: number): number[] {
-  const out: number[] = [];
-  let i = 0;
-  while (i < seq.length) {
-    if (i + 1 < seq.length && seq[i] === a && seq[i + 1] === b) {
-      out.push(newId);
-      i += 2;
-    } else {
-      out.push(seq[i]);
-      i += 1;
-    }
-  }
-  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +146,14 @@ export function cost(m: GrammarModel): CostBreakdown {
   const alphabetBits = m.terminals.length * cfg.charBits;
 
   if (cfg.codeMode === 'uniform') {
+    // Uniform code: every symbol reference — in the stream or in a rule body —
+    // costs the same log2(V) bits, V = |terminals| + |rules|. So
+    //   L(D|M) = |sequence| · log2(V)                    (compressed stream)
+    //   L(M)   = 2·|rules| · log2(V)                     (rule bodies, 2 refs each)
+    //          + |rules| · log2(V)      [if overhead]    (per-rule framing slot)
+    //          + |terminals| · charBits                  (spell the alphabet; fixed)
+    // Adding a rule raises log2(V) for EVERY reference in the message — that is
+    // the price an n-fold replacement's savings must beat.
     const V = vocabSize(m);
     const bps = uniformBits(V); // bits per symbol reference
 
@@ -222,7 +200,11 @@ export function cost(m: GrammarModel): CostBreakdown {
     };
   }
 
-  // Shannon / entropy coding.
+  // Shannon / entropy coding: pool occurrence counts over the whole message
+  // (sequence + rule bodies), then charge each occurrence of symbol i its ideal
+  // codelength −log2(c_i / total). Summed, L = Σ_i c_i · −log2(c_i/total)
+  // = total · H(empirical) — idealised entropy coding, no integer-length
+  // rounding (real Huffman/arithmetic codes come within a bit of this).
   const counts = symbolCounts(m);
   let total = 0;
   for (const c of counts.values()) total += c;
@@ -232,7 +214,9 @@ export function cost(m: GrammarModel): CostBreakdown {
   const len = (id: number) => codeLen.get(id) ?? 0;
   const dataBits = m.sequence.reduce((s, id) => s + len(id), 0);
   const ruleBodyBits = m.rules.reduce((s, r) => s + len(r.rhs[0]) + len(r.rhs[1]), 0);
-  // Transmit the code table: one frequency per distinct symbol.
+  // Transmit the code table: one frequency per distinct symbol, each a count in
+  // [0..total] sent with a uniform code of log2(total+1) bits. Without this the
+  // decoder could not rebuild the codelengths.
   const codeTableBits = cfg.includeOverhead ? counts.size * uniformBits(total + 1) : 0;
 
   const modelBits = ruleBodyBits + codeTableBits + alphabetBits;
@@ -282,6 +266,8 @@ export function candidates(m: GrammarModel): DigramMove[] {
   const counts = countDigrams(m.sequence);
   const out: DigramMove[] = [];
   for (const { a, b, n } of counts.values()) {
+    // RePair condition: only digrams seen ≥ 2 times. A rule used once can never
+    // pay — its body alone (2 refs) outweighs the single symbol it removes.
     if (n >= 2) out.push({ a, b });
   }
   return out;
@@ -299,6 +285,13 @@ export function scoreMove(
   move: DigramMove,
   baseline: CostBreakdown
 ): ScoredMove<DigramMove> {
+  // ΔL is exact, by re-costing the full model after the move:
+  //   delta = [L(M′) + L(D|M′)] − [L(M) + L(D|M)]
+  // Under 'uniform' the trade it captures: the stream loses n symbols, the
+  // model gains 2 refs (+ framing), and every surviving reference now pays
+  // log2(V+1) instead of log2(V). Under 'shannon' all codelengths shift with
+  // the new frequency profile. No closed-form ΔL shortcut — exactness over
+  // speed, since the point is to study the numbers.
   const after = cost(apply(m, move));
   const counts = countDigrams(m.sequence);
   const n = counts.get(`${move.a},${move.b}`)?.n ?? 0;

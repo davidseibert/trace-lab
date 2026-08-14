@@ -60,7 +60,16 @@ function cumulativeBefore(dist: CodeDistEntry[], k: number): number {
   return c;
 }
 
-/** Fewest-bit dyadic fraction k/2^b lying inside [lo, hi). */
+/**
+ * Fewest-bit dyadic fraction k/2^b lying inside [lo, hi).
+ *
+ * Existence bound: once 2⁻ᵇ ≤ w = hi−lo, the smallest multiple of 2⁻ᵇ at or
+ * above lo, ⌈lo·2ᵇ⌉/2ᵇ, is < lo + 2⁻ᵇ ≤ hi — inside. So the loop stops by
+ * b = ⌈−log2 w⌉ ≤ Σ −log2(pᵢ) + 1: the actual codeword exceeds the ideal
+ * fractional bit count by less than one bit, for the whole message. That is
+ * "prediction is compression" made exact — per-symbol rounding (Huffman's
+ * up-to-1-bit-per-symbol loss) never happens because symbols share one number.
+ */
 export function shortestCodeword(lo: number, hi: number): Codeword {
   for (let b = 1; b <= 53; b++) {
     const scale = 2 ** b;
@@ -81,7 +90,21 @@ export function shortestCodeword(lo: number, hi: number): Codeword {
   return { bits: '', value: lo, nbits: 53 };
 }
 
-/** Encode the stream, returning the per-symbol trace and the final codeword. */
+/**
+ * Encode the stream, returning the per-symbol trace and the final codeword.
+ *
+ * Invariant: after folding x₁…xᵢ, [lo, hi) has width w = Π p(xⱼ) and the
+ * intervals of all possible i-symbol prefixes exactly tile [0,1) — each prefix
+ * owns a disjoint slice whose width is its probability. Hence
+ * bitsSoFar = −log2(w) = Σ −log2(pⱼ): widths multiply, surprisals add.
+ *
+ * Production coders can't hold w in one float: they keep lo/hi as integers,
+ * renormalize by shifting out each leading bit once lo and hi agree on it,
+ * track underflow bits while the interval straddles ½, and propagate carries
+ * when lo overflows. Here float64 holds the entire interval and coder.ts caps
+ * the message at MAX_BITS ≈ 48 ideal bits so w never sinks below float
+ * resolution — all of that machinery drops away and the invariant stays legible.
+ */
 export function encode(stream: CodeStream): { steps: CoderStep[]; codeword: Codeword } {
   let lo = 0;
   let hi = 1;
@@ -89,6 +112,10 @@ export function encode(stream: CodeStream): { steps: CoderStep[]; codeword: Code
   const emitted: string[] = [];
 
   for (let i = 0; i < stream.length; i++) {
+    // The model's CDF partitions [0,1) into bands; symbol k owns
+    // [C(k), C(k)+pₖ). The affine map t ↦ lo + w·t transplants that partition
+    // into the current interval, and we keep the chosen symbol's band:
+    // width shrinks by exactly ×p, costing −log2(p) bits.
     const sym = stream[i];
     const w = hi - lo;
     const cumLo = cumulativeBefore(sym.dist, sym.chosenIndex);
@@ -140,17 +167,23 @@ export function decode(value: number, stream: CodeStream): CoderStep[] {
     const w = hi - lo;
     const x = (value - lo) / w; // where the codeword sits within this interval
 
-    // Locate which cumulative band contains x.
+    // Locate which cumulative band contains x — inverting the CDF: find the j
+    // with C(j) ≤ x < C(j) + pⱼ. Then apply the SAME affine map as encode, so
+    // both sides walk identical intervals and the round-trip is exact (up to
+    // the shared float64 arithmetic, which is deterministic on both sides).
+    // The last-index guard makes the final band catch any float residue
+    // (x ≳ ΣC), and stopping BEFORE adding the chosen band's mass leaves
+    // cum = C(chosenIndex) — the band's lower edge, ready to reuse below.
     let cum = 0;
     let chosenIndex = dist.length - 1;
     for (let j = 0; j < dist.length; j++) {
-      if (x < cum + dist[j].p) {
+      if (x < cum + dist[j].p || j === dist.length - 1) {
         chosenIndex = j;
         break;
       }
       cum += dist[j].p;
     }
-    const cumLo = cumulativeBefore(dist, chosenIndex);
+    const cumLo = cum;
     const p = dist[chosenIndex].p;
     const cumHi = cumLo + p;
     const newLo = lo + w * cumLo;

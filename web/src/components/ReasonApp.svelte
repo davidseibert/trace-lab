@@ -13,6 +13,7 @@
     type ReasonTok
   } from '../lib/logit/api';
   import { engine } from '../lib/logit/engine.svelte';
+  import { surprisal, thinkRegions } from '../lib/reason';
   import { router } from '../lib/router.svelte';
 
   import InterpretGuide from './InterpretGuide.svelte';
@@ -55,17 +56,25 @@
   let temperature = $state(router.num('temp') ?? 0.6);
   let seed = $state<number | null>(router.num('seed'));
 
-  // Settings — seed and temperature included — live in the URL, so a refresh
-  // keeps them and a copied link replays the run.
-  $effect(() => {
-    router.setQuery({
+  // The six run settings as one query record (defaults → null, kept out of the
+  // URL). Both URL writers below build from this; they differ only in
+  // provenance — the live effect writes the input boxes, copyRunLink pins what
+  // the engine actually ran with (meta.seed / meta.temperature).
+  function runQuery(temp: number, seedVal: number | null) {
+    return {
       m: modelName === 'Qwen/Qwen3-0.6B' ? null : modelName,
       p: prompt === DEFAULT_PROMPT ? null : prompt,
       think: thinking ? null : false,
       budget: budget === 512 ? null : budget,
-      temp: temperature === 0.6 ? null : temperature,
-      seed: seed !== null && !Number.isNaN(seed) ? seed : null
-    });
+      temp: temp === 0.6 ? null : temp,
+      seed: seedVal !== null && !Number.isNaN(seedVal) ? seedVal : null
+    };
+  }
+
+  // Settings — seed and temperature included — live in the URL, so a refresh
+  // keeps them and a copied link replays the run.
+  $effect(() => {
+    router.setQuery(runQuery(temperature, seed));
   });
 
   let streaming = $state(false);
@@ -135,13 +144,11 @@
   let copied = $state(false);
   async function copyRunLink() {
     if (!meta) return;
+    // Same record as the live URL, but seed/temp pinned to the finished run.
     const q = new URLSearchParams();
-    if (modelName !== 'Qwen/Qwen3-0.6B') q.set('m', modelName);
-    if (prompt !== DEFAULT_PROMPT) q.set('p', prompt);
-    if (!thinking) q.set('think', '0');
-    if (budget !== 512) q.set('budget', String(budget));
-    if (meta.temperature !== 0.6) q.set('temp', String(meta.temperature));
-    if (meta.seed !== null) q.set('seed', String(meta.seed));
+    for (const [k, v] of Object.entries(runQuery(meta.temperature, meta.seed))) {
+      if (v !== null) q.set(k, typeof v === 'boolean' ? (v ? '1' : '0') : String(v));
+    }
     const qs = q.toString();
     const url = `${location.origin}${location.pathname}#/reason${qs ? `?${qs}` : ''}`;
     try {
@@ -269,11 +276,13 @@
   // ---- Δbits: re-price the selected token without the think region ----
   let ablate = $state<AblateResponse | null>(null);
   let ablating = $state(false);
+  // The think region as sequence POSITIONS for the mask. thinkRegions() finds
+  // it robustly (text-space, prompt-seeded — see lib/reason.ts), so this works
+  // on models like R1 whose template pre-opens <think>.
   const thinkSpan = $derived.by(() => {
-    const a = player.steps.findIndex((t) => t.t === '<think>');
-    const b = player.steps.findIndex((t) => t.t === '</think>');
-    if (a < 0 || b < 0) return null;
-    return { start: player.steps[a]!.pos, end: player.steps[b]!.pos };
+    const span = thinkRegions(player.steps, meta ? meta.tokens.join('') : null).spans[0];
+    if (!span) return null;
+    return { start: player.steps[span.start]!.pos, end: player.steps[span.end]!.pos };
   });
   $effect(() => {
     void player.index;
@@ -298,7 +307,6 @@
       ablating = false;
     }
   }
-  const surp = (s: ReasonTok) => -Math.log2(Math.max(s.p, 1e-30));
   const note = $derived(
     !meta || !sel
       ? streaming
@@ -390,7 +398,12 @@
   {/snippet}
 
   {#snippet pTokbits()}
-    <TokenBitsStrip steps={player.steps} selected={player.index} onPick={(i) => player.seek(i)} />
+    <TokenBitsStrip
+      steps={player.steps}
+      selected={player.index}
+      prefixText={meta ? meta.tokens.join('') : null}
+      onPick={(i) => player.seek(i)}
+    />
   {/snippet}
 
   {#snippet pDepth()}
@@ -416,7 +429,7 @@
               <div class="ghead mono faint">this token, up the ladder</div>
               <div class="ladderline mono">
                 <span class="faint">emitted with</span>
-                p = {(sel.p * 100).toFixed(2)}% · <b style="color:var(--data)">{surp(sel).toFixed(2)}b</b>
+                p = {(sel.p * 100).toFixed(2)}% · <b style="color:var(--data)">{surprisal(sel).toFixed(2)}b</b>
               </div>
               <div class="ladderline mono">
                 <span class="faint">{meta!.layers[rung]} says</span>

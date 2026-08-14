@@ -340,7 +340,7 @@ server.registerTool(
         seq: number; n_layers: number; n_heads: number;
         agg: number[]; vagg: number[];
         heads: { layer: number; head: number; entropy: number; sink: number; top: { pos: number; w: number; vw: number }[] }[];
-        picked: { row: number[]; vrow: number[] } | null;
+        picked: { vrow: number[] } | null;
       }>(`${ENGINE_URL}/attn`, { model, ids, pos, layer, head }, ENGINE_HINT);
       const rank = (v: number[]) =>
         v.map((w, i) => ({ pos: i, w: round(w, 5) })).sort((x, y) => y.w - x.w).slice(0, top);

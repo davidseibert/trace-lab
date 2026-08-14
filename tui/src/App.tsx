@@ -325,7 +325,7 @@ function Offline(props: { device: string | null; loading: boolean; message: stri
             <span fg={theme.faint}>{`no lens engine at ${ENGINE_URL} — start it with:`}</span>
           </text>
           <text>
-            <span fg={theme.text}>make engine</span>
+            <span fg={theme.text}>make up</span>
           </text>
           <text>
             <span fg={theme.faint}>then press ⏎ to retry</span>

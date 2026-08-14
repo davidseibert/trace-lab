@@ -30,10 +30,16 @@
  *               coding: "ing" is cheap, a one-off morph is dear).
  */
 
-import type { CostBreakdown, MdlProblem, ScoredMove } from '../mdl/types';
+import type { CodeMode, CostBreakdown, MdlProblem, ScoredMove } from '../mdl/types';
 import { fmt, surprisal, uniformBits } from '../mdl/format';
+import {
+  vocabSize,
+  expandVisible,
+  replaceDigram,
+  token as symToken
+} from '../mdl/symbols';
 
-export type CodeMode = 'uniform' | 'shannon';
+export type { CodeMode };
 
 export interface MorphConfig {
   codeMode: CodeMode;
@@ -83,49 +89,28 @@ export const defaultConfig: MorphConfig = {
 };
 
 // ---------------------------------------------------------------------------
-// Symbol helpers (morph ids: < terminals.length are chars, else learned morphs)
+// Symbol helpers (morph ids: < terminals.length are chars, else learned
+// morphs) — the shared algebra in ../mdl/symbols, identical to the string
+// lens's. Re-exported so this lens's public API is unchanged.
 // ---------------------------------------------------------------------------
 
-export const vocabSize = (m: MorphModel): number =>
-  m.terminals.length + m.rules.length;
-
-export const isTerminal = (m: MorphModel, id: number): boolean =>
-  id < m.terminals.length;
-
-export const ruleIndexOf = (m: MorphModel, id: number): number =>
-  id - m.terminals.length;
+export {
+  vocabSize,
+  isTerminal,
+  ruleIndexOf,
+  showChar,
+  expand,
+  expandVisible,
+  replaceDigram
+} from '../mdl/symbols';
 
 /** Printable token for a morph id: the char itself, or "M{k}". */
-export function token(m: MorphModel, id: number): string {
-  if (isTerminal(m, id)) return showChar(m.terminals[id]);
-  return `M${ruleIndexOf(m, id)}`;
-}
-
-/** Render a single character visibly (whitespace made explicit). */
-export function showChar(ch: string): string {
-  if (ch === ' ') return '␣';
-  if (ch === '\n') return '⏎';
-  if (ch === '\t') return '⇥';
-  return ch;
-}
-
-/** Fully expand a morph id to its underlying character string. */
-export function expand(m: MorphModel, id: number, memo = new Map<number, string>()): string {
-  if (isTerminal(m, id)) return m.terminals[id];
-  const cached = memo.get(id);
-  if (cached !== undefined) return cached;
-  const rule = m.rules[ruleIndexOf(m, id)];
-  const s = expand(m, rule.rhs[0], memo) + expand(m, rule.rhs[1], memo);
-  memo.set(id, s);
-  return s;
-}
-
-/** Visible expansion (whitespace made explicit) for display. */
-export const expandVisible = (m: MorphModel, id: number): string =>
-  [...expand(m, id)].map(showChar).join('');
+export const token = (m: MorphModel, id: number): string => symToken(m, id, 'M');
 
 // ---------------------------------------------------------------------------
-// Digram counting + replacement — WORD-BOUNDED and FREQUENCY-WEIGHTED
+// Digram counting — WORD-BOUNDED and FREQUENCY-WEIGHTED. This is where the
+// morphology lens genuinely diverges from the string lens: same replaceDigram
+// fold (applied per word in `apply`), different way of COUNTING occurrences.
 // ---------------------------------------------------------------------------
 
 const key = (a: number, b: number): string => `${a},${b}`;
@@ -154,22 +139,6 @@ export function countDigrams(words: Word[]): Map<string, { a: number; b: number;
     }
   }
   return counts;
-}
-
-/** Replace every non-overlapping occurrence of pair (a,b) within one word. */
-function replaceInSeq(seq: number[], a: number, b: number, newId: number): number[] {
-  const out: number[] = [];
-  let i = 0;
-  while (i < seq.length) {
-    if (i + 1 < seq.length && seq[i] === a && seq[i + 1] === b) {
-      out.push(newId);
-      i += 2;
-    } else {
-      out.push(seq[i]);
-      i += 1;
-    }
-  }
-  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -203,6 +172,14 @@ export function cost(m: MorphModel): CostBreakdown {
   const tokens = corpusTokens(m);
 
   if (cfg.codeMode === 'uniform') {
+    // Uniform code, as in the grammar lens but over frequency-WEIGHTED tokens:
+    //   L(D|M) = (Σ_w count(w)·|seq(w)|) · log2(V)       (corpus morph tokens)
+    //   L(M)   = 2·|rules| · log2(V)                     (morph bodies, 2 refs each)
+    //          + |rules| · log2(V)      [if overhead]    (per-entry framing slot)
+    //          + |terminals| · charBits                  (spell the alphabet; fixed)
+    // A merge seen n weighted times removes n tokens from the corpus term but
+    // adds a lexicon entry and nudges log2(V) up for everyone — a morph earns
+    // its keep only when n amortises that.
     const V = vocabSize(m);
     const bps = uniformBits(V); // bits per morph reference
 
@@ -249,7 +226,11 @@ export function cost(m: MorphModel): CostBreakdown {
     };
   }
 
-  // Shannon / entropy coding.
+  // Shannon / entropy coding: pool weighted counts (corpus tokens × word
+  // frequency, + 1 per rule-body ref) and charge each occurrence its ideal
+  // codelength −log2(c_id / total). dataBits below is the per-word sum of morph
+  // codelengths re-weighted by word frequency — algebraically the same as
+  // Σ_id c_id·surprisal restricted to corpus occurrences.
   const counts = symbolCounts(m);
   let total = 0;
   for (const c of counts.values()) total += c;
@@ -262,7 +243,8 @@ export function cost(m: MorphModel): CostBreakdown {
     0
   );
   const ruleBodyBits = m.rules.reduce((s, r) => s + len(r.rhs[0]) + len(r.rhs[1]), 0);
-  // Transmit the code table: one frequency per distinct morph.
+  // Transmit the code table: one frequency per distinct morph, each a count in
+  // [0..total] sent with a uniform code of log2(total+1) bits.
   const codeTableBits = cfg.includeOverhead ? counts.size * uniformBits(total + 1) : 0;
 
   const modelBits = ruleBodyBits + codeTableBits + alphabetBits;
@@ -312,6 +294,9 @@ export function candidates(m: MorphModel): MergeMove[] {
   const counts = countDigrams(m.words);
   const out: MergeMove[] = [];
   for (const { a, b, n } of counts.values()) {
+    // Merge condition: weighted count ≥ 2. n is frequency-weighted, so a pair
+    // inside a single word type of count 2 qualifies; a pair occurring once in
+    // a count-1 word cannot repay its 2-ref lexicon body.
     if (n >= 2) out.push({ a, b });
   }
   return out;
@@ -320,9 +305,10 @@ export function candidates(m: MorphModel): MergeMove[] {
 export function apply(m: MorphModel, move: MergeMove): MorphModel {
   const newId = vocabSize(m);
   const rules = [...m.rules, { rhs: [move.a, move.b] as [number, number] }];
+  // Shared replaceDigram, applied per word — merges never cross a word boundary.
   const words = m.words.map((w) => ({
     ...w,
-    seq: replaceInSeq(w.seq, move.a, move.b, newId)
+    seq: replaceDigram(w.seq, move.a, move.b, newId)
   }));
   return { ...m, rules, words };
 }
@@ -332,6 +318,10 @@ export function scoreMove(
   move: MergeMove,
   baseline: CostBreakdown
 ): ScoredMove<MergeMove> {
+  // Exact ΔL by full re-cost (delta = total′ − total), as in the grammar lens.
+  // The difference here: n is the frequency-WEIGHTED occurrence count, so a
+  // merge inside one very common word can beat one spread across many rare
+  // types — that is what pulls out corpus-frequent stems and affixes.
   const after = cost(apply(m, move));
   const counts = countDigrams(m.words);
   const n = counts.get(`${move.a},${move.b}`)?.n ?? 0;

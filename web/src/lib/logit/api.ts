@@ -32,17 +32,15 @@ export interface ModelInfo {
 }
 
 export interface EngineHealth {
-  ok: boolean;
   device: string;
-  loaded: string[];
   models: ModelInfo[];
   default: string;
 }
 
+/** Only the /health fields this client reads — the wire also carries `ok` and
+ * `loaded` (relayed whole by the MCP bridge, unused here). */
 interface RawHealth {
-  ok: boolean;
   device: string;
-  loaded: string[];
   models: string[];
   default?: string;
   model_info?: Record<string, Omit<ModelInfo, 'name' | 'kind'> & { kind?: 'hub' | 'local' }>;
@@ -90,9 +88,7 @@ export async function fetchHealth(): Promise<EngineHealth> {
   if (!res.ok) throw new Error(`engine ${res.status}`);
   const raw = (await res.json()) as RawHealth;
   return {
-    ok: raw.ok,
     device: raw.device,
-    loaded: raw.loaded,
     default: raw.default ?? raw.models[0] ?? 'gpt2',
     models: raw.models.map((name) => ({
       name,
@@ -109,9 +105,6 @@ export async function fetchLens(req: {
   jlens?: boolean;
   /** Greedy-decode up to this many tokens server-side; the lens covers prompt+continuation. */
   rollout?: number;
-  /** Wrap the prompt in the model's chat template (thinking opens a <think> block). */
-  chat?: boolean;
-  thinking?: boolean;
 }): Promise<LensResponse> {
   const res = await fetch(`${ENGINE_URL}/lens`, {
     method: 'POST',
@@ -238,6 +231,8 @@ export interface TrainCheckpoint {
   /** Directory name — served by the engine as `local/<name>`. */
   name: string;
   note: string;
+  /** Server-side filesystem path the checkpoint was written to. */
+  path: string;
 }
 export interface TrainDone {
   event: 'done';
@@ -293,7 +288,8 @@ export async function streamTrain(
   }
 }
 
-/** One head's stats at a destination position (from /attn). */
+/** One head's stats at a destination position (from /attn). The wire also
+ * carries each head's `top` source list — read by the MCP bridge, not here. */
 export interface AttnHead {
   layer: number;
   head: number;
@@ -301,22 +297,20 @@ export interface AttnHead {
   entropy: number;
   /** Mass on position 0 (the attention-sink no-op). */
   sink: number;
-  top: { pos: number; w: number; vw: number }[];
 }
 
+/** Only the /attn fields this client reads — the wire also carries `n_layers`
+ * and the raw aggregate `agg` (both read by the MCP bridge). */
 export interface AttnResponse {
   model: string;
   pos: number;
   seq: number;
-  n_layers: number;
   n_heads: number;
-  /** Mean raw attention received per source, over all layers×heads. */
-  agg: number[];
   /** Value-weighted aggregate (a·‖v‖ renormalized) — discounts sink stares. */
   vagg: number[];
   heads: AttnHead[];
-  /** The requested layer/head's full rows, if asked for. */
-  picked: { row: number[]; vrow: number[] } | null;
+  /** The requested layer/head's full value-weighted row, if asked for. */
+  picked: { vrow: number[] } | null;
 }
 
 /** Where the computation that produced a token looked (destination = pos). */
@@ -324,7 +318,6 @@ export async function fetchAttn(req: {
   model: string;
   ids: number[];
   pos: number;
-  top_sources?: number;
   layer?: number;
   head?: number;
 }): Promise<AttnResponse> {
@@ -380,9 +373,6 @@ export async function fetchColumn(req: {
   top_k?: number;
   jlens?: boolean;
   rollout?: number;
-  /** Must match the /lens or /chat request whose columns you're drilling into. */
-  chat?: boolean;
-  thinking?: boolean;
   /** The exact sequence to lens (prompt ids + streamed ids): fork-proof, and
    * required for sampled traces. When set the server ignores prompt/rollout. */
   ids?: number[];

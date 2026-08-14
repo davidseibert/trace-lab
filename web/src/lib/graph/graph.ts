@@ -36,11 +36,11 @@
  *               *naming* stays uniform (positions aren't frequency-coded).
  */
 
-import type { CostBreakdown, MdlProblem, ScoredMove } from '../mdl/types';
+import type { CodeMode, CostBreakdown, MdlProblem, ScoredMove } from '../mdl/types';
 import { fmt, surprisal, uniformBits } from '../mdl/format';
 import { findPatterns } from './match';
 
-export type CodeMode = 'uniform' | 'shannon';
+export type { CodeMode };
 
 export interface GraphConfig {
   codeMode: CodeMode;
@@ -156,6 +156,27 @@ function labelCounts(m: GraphModel): { node: Map<number, number>; edge: Map<numb
 // Cost: L(M) + L(D | M)
 // ---------------------------------------------------------------------------
 
+/**
+ * Description length of the current state. Uniform-mode counting scheme, for a
+ * graph of N nodes, E edges, node vocab Vn = |base labels| + |subs|, edge vocab Ve:
+ *
+ *   L(D|M)  nodes: N · log2(Vn)                    one label reference per node
+ *           edges: E · (2·log2(N) + log2(Ve))      name src, name dst, name label
+ *
+ * Adjacency is thus an explicit edge list — each endpoint a uniform choice among
+ * the N *current* nodes, so collapsing nodes cheapens every remaining edge (and
+ * shrinks N·log2(Vn) even as log2(Vn) itself grows with the vocab).
+ *
+ *   L(M)    each substructure is the same encoding applied to its own small
+ *           graph, except a pattern edge's endpoints index only the pattern's
+ *           own n nodes: log2(n) bits, not log2(N). Plus one label ref per sub
+ *           (framing) and the fixed alphabet spell-out.
+ *
+ * Shannon mode swaps every *label* reference for its surprisal -log2(count/total)
+ * under the empirical label frequencies (counted across graph + dictionary, so
+ * one shared code covers both); endpoint *naming* stays uniform — positions are
+ * identities, not repeatable symbols, so frequency-coding them is meaningless.
+ */
 export function cost(m: GraphModel): CostBreakdown {
   const cfg = m.config;
   const Vn = vocabSize(m);
@@ -181,6 +202,8 @@ export function cost(m: GraphModel): CostBreakdown {
       subNodeBits += s.nodes.length * nodeRefBits;
       subEdgeBits += s.edges.length * (2 * uniformBits(s.nodes.length) + edgeLabelBits);
     }
+    // Framing: announcing each sub's symbol id costs one label ref — the price
+    // of making the dictionary addressable at all.
     const framingBits = cfg.includeOverhead ? m.subs.length * nodeRefBits : 0;
     const modelBits = subNodeBits + subEdgeBits + framingBits + alphabetBits;
 
@@ -259,7 +282,9 @@ export function cost(m: GraphModel): CostBreakdown {
       0
     );
   }
-  // Transmit the code tables: one frequency per distinct label used.
+  // Transmit the code tables: one frequency per distinct label used. A count
+  // lies in [0, total], so each costs log2(total+1) bits — the honesty term
+  // that stops Shannon coding from getting its distribution for free.
   const codeTableBits = cfg.includeOverhead
     ? nodeCnt.size * uniformBits(nodeTotal + 1) + edgeCnt.size * uniformBits(edgeTotal + 1)
     : 0;
@@ -334,14 +359,12 @@ export function apply(m: GraphModel, move: SubMove): GraphModel {
   });
 
   // One composite node per instance, placed at the centroid of its constituents.
-  const compositeId: number[] = move.instances.map((inst) => {
+  for (const inst of move.instances) {
     const originIds = inst.flatMap((id) => m.nodes[id].originIds);
     const newId = nodes.length;
     nodes.push({ label: newSubId, originIds });
     for (const id of inst) remap.set(id, newId);
-    return newId;
-  });
-  void compositeId;
+  }
 
   // Rewire edges. Edges internal to a single instance are now stored inside the
   // substructure definition, so we drop them from the graph; everything else is
@@ -357,6 +380,16 @@ export function apply(m: GraphModel, move: SubMove): GraphModel {
   return { ...m, subs, nodes, edges };
 }
 
+/**
+ * ΔL for a candidate: apply the move to a copy and re-cost from scratch, so
+ * delta = L(after) − L(before) is EXACT — unlike classic SUBDUE's local
+ * estimate, this captures every side effect (Vn grows by 1, so log2(Vn) rises
+ * for all node refs; N shrinks, so every surviving edge's endpoints cheapen;
+ * Shannon frequencies reshuffle). The gain itself: each of the c folded
+ * instances trades |P| node refs + its internal edges for ONE composite ref,
+ * while the pattern's own encoding is paid once, in L(M) — so ΔL < 0 exactly
+ * when c·(savings per instance) outweighs dictionary + vocab growth.
+ */
 export function scoreMove(m: GraphModel, move: SubMove, baseline: CostBreakdown): ScoredMove<SubMove> {
   const after = cost(apply(m, move));
   const nextIdx = m.subs.length;

@@ -34,11 +34,11 @@
  *                     shannon: sum over tokens of -log2(p)   (real entropy code)
  */
 
-import type { CostBreakdown } from '../mdl/types';
+import type { CodeMode, CostBreakdown } from '../mdl/types';
 import { fmt, surprisal, uniformBits } from '../mdl/format';
 import { parseWordList } from '../morphology/morphology';
 
-export type CodeMode = 'uniform' | 'shannon';
+export type { CodeMode };
 
 export interface MorfConfig {
   codeMode: CodeMode;
@@ -111,6 +111,10 @@ export function countsOf(words: MorfWord[], analyses: string[][]): Map<string, n
   return c;
 }
 
+// Incremental bookkeeping for leave-one-out scoring. removeSeg deletes a morph
+// outright when its count reaches 0 — that matters, because the lexicon term in
+// costComponents is keyed on counts.keys(): a morph's spelling bits (and its
+// slot in V) vanish the moment its last token does.
 const addSeg = (counts: Map<string, number>, seg: string[], w: number) => {
   for (const m of seg) counts.set(m, (counts.get(m) ?? 0) + w);
 };
@@ -123,8 +127,25 @@ const removeSeg = (counts: Map<string, number>, seg: string[], w: number) => {
   }
 };
 
-/** Fast total bits for the hot scoring loop (no itemised breakdown). */
-function totalBits(counts: Map<string, number>, alphabetSize: number, cfg: MorfConfig): number {
+/** The itemised components of the Morfessor cost — the ONE place the
+ *  arithmetic lives. Both the hot search loop (`totalBits`) and the itemised
+ *  display (`cost`) call this, so what the search optimizes and what the UI
+ *  shows cannot drift apart.
+ *
+ *  total = L(M) + L(D|M), with T = Σ counts (corpus tokens), V = |lexicon|:
+ *    L(M)   = Σ_{m ∈ lexicon} (|m|+1) · log2(A+1)   — spell each morph char by
+ *             char over the A-letter alphabet + an end-of-morph symbol (the +1s)
+ *           + A · charBits                          — declare the alphabet (fixed)
+ *    L(D|M) = uniform:  T · log2(V)
+ *             shannon:  Σ_types c · (−log2(c/T))    — per-token −log2(p); tokens
+ *                       of a type share a codelength, so we sum by type
+ *  The lexicon is whatever has ≥1 token, so re-cutting a word away from a morph
+ *  automatically shrinks both the spelling sum and V. */
+function costComponents(
+  counts: Map<string, number>,
+  alphabetSize: number,
+  cfg: MorfConfig
+): { T: number; V: number; perSym: number; lexiconBits: number; alphabetBits: number; dataBits: number } {
   let T = 0;
   for (const v of counts.values()) T += v;
   const V = counts.size;
@@ -142,32 +163,26 @@ function totalBits(counts: Map<string, number>, alphabetSize: number, cfg: MorfC
     for (const v of counts.values()) s += v * surprisal(v / T);
     dataBits = s;
   }
-  return lexiconBits + alphabetBits + dataBits;
+
+  return { T, V, perSym, lexiconBits, alphabetBits, dataBits };
 }
 
-/** Full itemised cost for a state snapshot. */
+/** Fast total bits for the hot scoring loop (no itemised breakdown). */
+function totalBits(counts: Map<string, number>, alphabetSize: number, cfg: MorfConfig): number {
+  const c = costComponents(counts, alphabetSize, cfg);
+  return c.lexiconBits + c.alphabetBits + c.dataBits;
+}
+
+/** Full itemised cost for a state snapshot. Delegates to `costComponents` —
+ *  the same components the search's `totalBits` sums — and only attaches
+ *  labels for the UI, so search and display share one set of formulas by
+ *  construction. */
 export function cost(state: MorfState): CostBreakdown {
   const counts = countsOf(state.words, state.analyses);
   const cfg = state.config;
   const A = state.alphabetSize;
 
-  let T = 0;
-  for (const v of counts.values()) T += v;
-  const V = counts.size;
-
-  const perSym = uniformBits(A + 1);
-  let lexiconBits = 0;
-  for (const m of counts.keys()) lexiconBits += (m.length + 1) * perSym;
-  const alphabetBits = A * cfg.charBits;
-
-  let dataBits: number;
-  if (cfg.codeMode === 'uniform') {
-    dataBits = T * uniformBits(V);
-  } else {
-    let s = 0;
-    for (const v of counts.values()) s += v * surprisal(v / T);
-    dataBits = s;
-  }
+  const { T, V, perSym, lexiconBits, alphabetBits, dataBits } = costComponents(counts, A, cfg);
 
   const modelBits = lexiconBits + alphabetBits;
   const bps = T > 0 ? dataBits / T : 0;
@@ -230,6 +245,8 @@ export function candidateSegs(s: string): string[][] {
     return out;
   }
 
+  // Bit k of mask = "cut after character k", so each mask in [0, 2^(n−1)) is
+  // one distinct segmentation; mask 0 is the whole word.
   const out: string[][] = [];
   for (let mask = 0; mask < 1 << cuts; mask++) {
     const seg: string[] = [];
@@ -287,7 +304,14 @@ export function morfessorTrace(
       const snapAnalyses = analyses.map((a) => a.slice());
       const stepCost = cost({ words, analyses: snapAnalyses, alphabetSize, config });
 
-      // Pull word i out, score every candidate against the rest of the model.
+      // Pull word i out, score every candidate against the rest of the model —
+      // leave-one-out re-estimation, the coordinate-descent heart of Morfessor.
+      // Each candidate's `total` is the EXACT global cost with that cut in
+      // place: under 'shannon' its morphs' codelengths −log2(c/T) already
+      // include the candidate's own contribution to the counts, so sharing a
+      // morph with other words genuinely cheapens it. delta = total − curTotal;
+      // re-adding oldSeg reproduces curTotal exactly, so "keep" always scores
+      // delta = 0 and best.total ≤ curTotal — the descent cannot go uphill.
       removeSeg(counts, oldSeg, w.count);
       const scored: SegCandidate[] = candidateSegs(w.surface).map((seg) => {
         addSeg(counts, seg, w.count);
@@ -303,7 +327,10 @@ export function morfessorTrace(
       );
 
       const best = scored[0];
-      // Only move on a strict improvement, so the descent is clean and monotone.
+      // Only move on a strict improvement (1e-9 absorbs float noise), so the
+      // descent is clean and monotone and ties never cause flip-flopping —
+      // which is also what makes "a full pass changed nothing" a sound
+      // convergence test.
       const changed = best.total < curTotal - 1e-9 && !sameSeg(best.seg, oldSeg);
       const applied = changed ? best.seg : oldSeg;
       addSeg(counts, applied, w.count);

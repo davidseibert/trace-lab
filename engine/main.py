@@ -85,7 +85,7 @@ ALLOWED_MODELS = [
 # `make tui MODEL=...` / `LENS_MODEL` can name a model that isn't on the list
 # above; honour it as the default and add it, so trying a new architecture
 # needs no code edit. The TUI reads `default` from /health to seed its dropdown.
-DEFAULT = (os.environ.get("LENS_MODEL") or "gpt2").strip() or "gpt2"
+DEFAULT = os.environ.get("LENS_MODEL", "").strip() or "gpt2"
 if DEFAULT not in ALLOWED_MODELS:
     ALLOWED_MODELS.insert(0, DEFAULT)
 
@@ -187,7 +187,7 @@ def _get(model_name: str):
         return _cache[model_name]
     # Free room BEFORE allocating the newcomer, so peak VRAM stays bounded.
     while len(_cache) >= MAX_RESIDENT:
-        _evicted, entry = _cache.popitem(last=False)  # least-recently-used
+        _, entry = _cache.popitem(last=False)  # least-recently-used
         del entry
         _free_vram()
     _cache[model_name] = load_model(_resolve(model_name))
@@ -357,8 +357,7 @@ class AttnRequest(BaseModel):
     # forwarded; eager attention materializes [heads, seq, seq] per layer, so
     # pos is capped to keep peak VRAM sane on a 12 GB card.
     pos: int = Field(ge=1, le=1500)
-    top_sources: int = Field(default=8, ge=1, le=32)
-    # Optionally include one head's full raw + value-weighted rows.
+    # Optionally include one head's full value-weighted row.
     layer: int | None = Field(default=None, ge=0)
     head: int | None = Field(default=None, ge=0)
 
@@ -370,7 +369,7 @@ def attn(req: AttnRequest):
     model, _tok, _device = _get(req.model)
     try:
         return {"model": req.model,
-                **attn_report(model, req.ids, req.pos, top_sources=req.top_sources,
+                **attn_report(model, req.ids, req.pos,
                               pick_layer=req.layer, pick_head=req.head)}
     except ValueError as e:
         raise HTTPException(400, str(e))

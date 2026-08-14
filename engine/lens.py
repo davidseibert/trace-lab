@@ -25,6 +25,8 @@ import torch.autograd.forward_ad as fwAD
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 DEFAULT_MODEL = "gpt2"
+# torch/math logs are natural (nats); bits = nats / ln 2, so every
+# "-log(p) / LN2" below is -log2 p — the ideal code length of p in bits.
 LN2 = math.log(2.0)
 
 
@@ -139,10 +141,17 @@ def _jvp_transported(
     position per pass is structural: JVPs are linear in the tangent, so seeding
     several positions at once would sum their transports through attention.
     """
-    tangent = torch.zeros_like(block_input)
+    # A JVP is a directional derivative: seeding tangent v yields J·v in one
+    # pass, no Jacobian ever materialized. Here v = the rung's own content at
+    # pos (zeros elsewhere), so the tangent that arrives at the top is exactly
+    # J·h — this vector as the rest of the network reshapes it, to first order.
+    tangent = torch.zeros_like(block_input)  # [1, seq, d]
     tangent[0, pos] = block_input[0, pos]
 
     def inject(module, args, kwargs):
+        # A dual tensor packs (primal, tangent); every op inside dual_level()
+        # then propagates the tangent by its own JVP rule. hidden_states
+        # arrives positionally (GPT-2 family) or as a kwarg (Llama family).
         if args:
             dual = fwAD.make_dual(args[0], tangent)
             return (dual, *args[1:]), kwargs
@@ -153,8 +162,10 @@ def _jvp_transported(
     captured: list[torch.Tensor | None] = [None]
 
     def capture(module, args):
+        # Read at the final norm's INPUT — the pre-norm final residual — so J
+        # spans exactly blocks layer_idx..N-1 and nothing else.
         _, tan = fwAD.unpack_dual(args[0])
-        captured[0] = None if tan is None else tan[0, pos].detach().clone()
+        captured[0] = None if tan is None else tan[0, pos].detach().clone()  # [d]
 
     final_norm, _ = _final_norm_and_unembed(model)
     h_inject = _blocks(model)[layer_idx].register_forward_pre_hook(inject, with_kwargs=True)
@@ -206,19 +217,27 @@ def _ladder(model, tok, input_ids, out, hidden, pos: int, top_k: int, jlens: boo
     final_norm, unembed = _final_norm_and_unembed(model)
     n = len(hidden)
 
+    # logits: [1, seq, V] -> the row at pos: [V]. .float() upcasts from
+    # bf16/fp16 BEFORE softmax so tiny tail probabilities (= large bit costs)
+    # survive; softmax is max-subtracted internally, so overflow isn't the
+    # worry — quantization of the tail is.
     final_probs = out.logits[0, pos].float().softmax(-1)
     pred_id = int(final_probs.argmax()) if target_id is None else target_id
     pred = {
         "token": _clean(tok.decode([pred_id])),
         "p": float(final_probs[pred_id]),
-        "bits": -math.log(float(final_probs[pred_id])) / LN2,
+        "bits": -math.log(float(final_probs[pred_id])) / LN2,  # surprisal of the pick itself
     }
 
+    # One entry per rung: decode rung idx's residual through the FINAL
+    # norm+unembed (the lens approximation) and price pred_id under it. The
+    # 1e-30 floor caps a rung's reportable cost at ~99.7 bits instead of
+    # letting log(0) blow up when an early rung gives the token no mass.
     bits: list[float] = []
     for idx, h in enumerate(hidden):
         # Same gotcha as the grid: the last hidden state is already normed.
-        normed = h[0, pos] if idx == n - 1 else final_norm(h[0, pos])
-        probs = unembed(normed).float().softmax(-1)
+        normed = h[0, pos] if idx == n - 1 else final_norm(h[0, pos])  # [d]
+        probs = unembed(normed).float().softmax(-1)  # [V]
         bits.append(-math.log(max(float(probs[pred_id]), 1e-30)) / LN2)
 
     jbits: list[float] | None = None
@@ -320,8 +339,13 @@ def _kv_heads(model) -> int:
     return getattr(model.config, "num_key_value_heads", None) or model.config.num_attention_heads
 
 
+# How many top source positions each head reports. Enough to see where a head
+# is really looking without shipping the full row for every layer×head.
+TOP_SOURCES = 8
+
+
 @torch.no_grad()
-def attn_report(model, ids: list[int], pos: int, top_sources: int = 8,
+def attn_report(model, ids: list[int], pos: int,
                 pick_layer: int | None = None, pick_head: int | None = None) -> dict:
     """Every head's attention row at destination ``pos``: where that token
     looked while being computed.
@@ -336,8 +360,8 @@ def attn_report(model, ids: list[int], pos: int, top_sources: int = 8,
         stare at a token whose value vector is ~zero (attention sinks); this
         discounts those no-op looks.
 
-    ``pick_layer``/``pick_head`` additionally return that one head's full raw
-    and value-weighted rows for UI overlays. Memory note: eager attention
+    ``pick_layer``/``pick_head`` additionally return that one head's full
+    value-weighted row for UI overlays. Memory note: eager attention
     materializes [heads, seq, seq] per layer, so seq is capped upstream.
     """
     input_ids = torch.tensor([ids], dtype=torch.long)
@@ -353,6 +377,8 @@ def attn_report(model, ids: list[int], pos: int, top_sources: int = 8,
     n_kv = _kv_heads(model)
 
     def grab_v(module, args, output):
+        # v_proj output: [1, seq, kv_heads*head_dim]; [0] drops batch, the
+        # view splits the fused head dimension back out.
         v = output[0].view(seq, n_kv, -1)  # [seq, kv_heads, head_dim]
         vnorms.append(v.float().norm(dim=-1).T.cpu())  # [kv_heads, seq]
 
@@ -364,36 +390,43 @@ def attn_report(model, ids: list[int], pos: int, top_sources: int = 8,
             h.remove()
 
     n_heads = out.attentions[0].shape[1]
-    group = n_heads // n_kv
+    group = n_heads // n_kv  # GQA: query head h shares KV head h // group
     agg = torch.zeros(seq)
     vagg = torch.zeros(seq)
     heads = []
     picked = None
     for L, att in enumerate(out.attentions):
+        # att: [1, heads, dst, src] post-softmax — fix dst=pos to get each
+        # head's row over sources (sums to 1 per head).
         rows = att[0, :, pos, :].float().cpu()  # [heads, seq]
         for h in range(n_heads):
             a = rows[h]
+            # Value-weighting: scale each source's weight by ‖v‖, renormalize
+            # back to a distribution. clamp_min guards 0/0 when every attended
+            # value is ~zero (a pure-sink row).
             w = a * vnorms[L][h // group]
             w = w / w.sum().clamp_min(1e-9)
             agg += a
             vagg += w
+            # Shannon entropy of the row, in bits: H = -Σ a·log2 a. The clamp
+            # makes 0·log 0 contribute 0 instead of NaN. Low H = a focused
+            # head; H near log2(seq) = uniform averaging.
             ent = float(-(a.clamp_min(1e-12) * a.clamp_min(1e-12).log2()).sum())
-            tk = a.topk(min(top_sources, seq))
+            tk = a.topk(min(TOP_SOURCES, seq))
             heads.append({
                 "layer": L, "head": h,
                 "entropy": round(ent, 3),
-                "sink": round(float(a[0]), 4),
+                "sink": round(float(a[0]), 4),  # mass parked on token 0 — the classic attention sink
                 "top": [{"pos": int(p), "w": round(float(x), 4), "vw": round(float(w[p]), 4)}
                         for x, p in zip(tk.values, tk.indices)],
             })
             if L == pick_layer and h == pick_head:
-                picked = {"row": [round(float(x), 5) for x in a],
-                          "vrow": [round(float(x), 5) for x in w]}
+                picked = {"vrow": [round(float(x), 5) for x in w]}
     n_total = len(out.attentions) * n_heads
     return {
         "pos": pos, "seq": seq,
         "n_layers": len(out.attentions), "n_heads": n_heads,
-        "agg": [round(float(x), 5) for x in agg / n_total],
+        "agg": [round(float(x), 5) for x in agg / n_total],   # mean over layers×heads
         "vagg": [round(float(x), 5) for x in vagg / n_total],
         "heads": heads,
         "picked": picked,
@@ -426,12 +459,17 @@ def ablate_report(model, tok, ids: list[int], pos: int, mask_start: int, mask_en
         return probs
 
     base = price()
+    # HF attention masks are ADDITIVE, applied to scores before softmax:
+    # 0 keeps a link, finfo.min drives its post-softmax weight to ~0. m[i, j]
+    # governs destination i's view of source j. Handing the model an explicit
+    # mask replaces its own, so triu(1) must rebuild the causal triangle
+    # (i can't see j > i) before the block rule is stamped on top.
     dtype = next(model.parameters()).dtype
     neg = torch.finfo(dtype).min
     m = torch.zeros(pos, pos, dtype=dtype)
     m.masked_fill_(torch.ones(pos, pos, dtype=torch.bool).triu(1), neg)  # causal
     m[mask_end:, mask_start:mask_end] = neg  # rows after the region can't read it
-    masked = price(m[None, None].to(device))
+    masked = price(m[None, None].to(device))  # [1, 1, dst, src]: broadcast over batch and heads
 
     def entry(probs):
         p = float(probs[target])
@@ -516,16 +554,19 @@ def reason_events(model, tok, text: str, max_new: int = 512,
         if sampler is None:
             next_id = int(probs.argmax())
         else:
+            # Temperature rescales logits before softmax: T<1 sharpens toward
+            # the argmax, T>1 flattens toward uniform. Only the DRAW uses this
+            # distribution; the reported p/bits stay on `probs` above.
             temp_probs = (out.logits[0, -1].float() / temperature).softmax(-1)
             next_id = int(torch.multinomial(temp_probs.cpu(), 1, generator=sampler).item())
 
         # One decode for every rung at once: stack the newest position's hidden
         # state per rung, final-norm all but the already-normed last one.
-        hs = torch.stack([h[0, -1] for h in out.hidden_states])
+        hs = torch.stack([h[0, -1] for h in out.hidden_states])  # [n_rungs, d]
         normed = torch.cat([final_norm(hs[:-1]), hs[-1:]])
         rung_probs = unembed(normed).float().softmax(-1)  # [n_rungs, vocab]
-        tgt = rung_probs[:, next_id].clamp_min(1e-30)
-        bits = (-tgt.log() / LN2).tolist()
+        tgt = rung_probs[:, next_id].clamp_min(1e-30)  # each rung's p(emitted token)
+        bits = (-tgt.log() / LN2).tolist()  # -log2 p across all rungs in one shot
         rtop = [_clean(tok.decode([int(i)])) for i in rung_probs.argmax(-1)]
 
         yield {
@@ -540,6 +581,8 @@ def reason_events(model, tok, text: str, max_new: int = 512,
         if next_id in eos_ids:
             yield {"event": "done", "reason": "eos"}
             return
+        # Incremental decode: forward only the new token; past_key_values
+        # carries every earlier position's keys/values.
         cur = torch.tensor([[next_id]], device=device)
     yield {"event": "done", "reason": "budget"}
 

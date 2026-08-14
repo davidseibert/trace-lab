@@ -1,3 +1,14 @@
+<script lang="ts" module>
+  // Dev-only invariant check for the graph cost model. Lives in module scope so
+  // it runs once per module load, not on every mount (the router remounts the
+  // lens on each navigation).
+  import { selfCheck } from '../lib/graph/graph';
+  if (import.meta.env.DEV) {
+    const r = selfCheck();
+    (r.ok ? console.log : console.warn)(r.msg);
+  }
+</script>
+
 <script lang="ts">
   import { Player } from '../lib/player.svelte';
   import { trace } from '../lib/mdl/engine';
@@ -6,13 +17,11 @@
     graphProblem,
     parseEdgeList,
     defaultConfig,
-    selfCheck,
     type GraphModel,
-    type SubMove,
-    type CodeMode
+    type SubMove
   } from '../lib/graph/graph';
   import { forceLayout, hashSeed } from '../lib/graph/layout';
-  import { router } from '../lib/router.svelte';
+  import { LensSettings } from '../lib/sampleState.svelte';
 
   import GraphView from './graph/GraphView.svelte';
   import SubstructuresView from './graph/SubstructuresView.svelte';
@@ -23,6 +32,7 @@
   import PanelHost from './PanelHost.svelte';
   import TopBar from './shell/TopBar.svelte';
   import TransportBar from './shell/TransportBar.svelte';
+  import CodeControls from './concept/CodeControls.svelte';
   import { PanelManager } from '../lib/panels/panels.svelte';
 
   const panels = new PanelManager(
@@ -127,80 +137,49 @@ hall:N grand:A amod`;
       [tri(0), tri(1), tri(2), sq(0), sq(1), 't0a:o s01:q bridge', 't2c:o s11:q bridge'].join('\n')
   };
 
-  const DEFAULT_SAMPLE = '4 triangles (chain)';
-  const initialSample =
-    router.get('sample') && SAMPLES[router.get('sample')!] ? router.get('sample')! : DEFAULT_SAMPLE;
-  let sampleKey = $state(initialSample);
-  let text = $state(router.get('text') ?? SAMPLES[initialSample]);
-  let codeMode = $state<CodeMode>(router.get('code') === 'shannon' ? 'shannon' : 'uniform');
-  let includeOverhead = $state(router.bool('oh') ?? true);
-
-  $effect(() => {
-    router.setQuery({
-      sample: sampleKey === DEFAULT_SAMPLE ? null : sampleKey,
-      text: text === SAMPLES[sampleKey] ? null : text,
-      code: codeMode === 'uniform' ? null : codeMode,
-      oh: includeOverhead ? null : false
-    });
-  });
+  const settings = new LensSettings({ samples: SAMPLES, defaultSample: '4 triangles (chain)' });
 
   const player = new Player<Step<GraphModel, SubMove>>();
 
   // The layout depends only on the base graph's shape, not on the code config,
   // so it's stable across uniform/Shannon/overhead toggles.
   const layout = $derived.by(() => {
-    const base = parseEdgeList(text || ' ', defaultConfig);
+    const base = parseEdgeList(settings.text || ' ', defaultConfig);
     return forceLayout(
       base.nodes.length,
       base.edges.map((e) => [e.src, e.dst] as [number, number]),
-      hashSeed(text)
+      hashSeed(settings.text)
     );
   });
 
   $effect(() => {
-    const config = { ...defaultConfig, codeMode, includeOverhead };
-    const problem = graphProblem(text || ' ', config);
+    const config = {
+      ...defaultConfig,
+      codeMode: settings.codeMode,
+      includeOverhead: settings.includeOverhead
+    };
+    const problem = graphProblem(settings.text || ' ', config);
     player.load(trace(problem, { maxSteps: 200 }));
   });
-
-  if (import.meta.env.DEV) {
-    const r = selfCheck();
-    (r.ok ? console.log : console.warn)(r.msg);
-  }
-
-  function pickSample(k: string) {
-    sampleKey = k;
-    text = SAMPLES[k];
-  }
 
   const cur = $derived(player.current);
   const reference = $derived(player.steps[0]?.cost.total ?? 1);
 </script>
 
 <TopBar {panels}>
-  <span class="formula mono" title="minimize total bits = model + data-given-model">
-    <b style="color:var(--total)">min</b>
-    <b style="color:var(--model)">L(M)</b>+<b style="color:var(--data)">L(D|M)</b>
-  </span>
-
-  <label class="f">
-    <span class="lbl">graph</span>
-    <select value={sampleKey} onchange={(e) => pickSample((e.currentTarget as HTMLSelectElement).value)}>
-      {#each Object.keys(SAMPLES) as k}<option value={k}>{k}</option>{/each}
-    </select>
-  </label>
-
-  <div class="f">
-    <span class="lbl">code</span>
-    <div class="toggle-group">
-      <button class:active={codeMode === 'uniform'} onclick={() => (codeMode = 'uniform')}>log₂V</button>
-      <button class:active={codeMode === 'shannon'} onclick={() => (codeMode = 'shannon')}>−log₂p</button>
-    </div>
-  </div>
-
-  <label class="cb" title="count the bits to transmit the model-of-the-model (dictionary framing / code table)">
-    <input type="checkbox" bind:checked={includeOverhead} /> overhead
-  </label>
+  <CodeControls
+    bind:codeMode={settings.codeMode}
+    bind:includeOverhead={settings.includeOverhead}
+    formulaTitle="minimize total bits = model + data-given-model"
+    overheadTitle="count the bits to transmit the model-of-the-model (dictionary framing / code table)"
+  >
+    <label class="f">
+      <span class="lbl">graph</span>
+      <select value={settings.sampleKey} onchange={(e) => settings.pick((e.currentTarget as HTMLSelectElement).value)}>
+        {#each Object.keys(SAMPLES) as k}<option value={k}>{k}</option>{/each}
+      </select>
+    </label>
+  </CodeControls>
 
   {#if cur}
     <span class="chars mono muted">{cur.model.nodes.length}n · {cur.model.edges.length}e</span>
@@ -209,31 +188,31 @@ hall:N grand:A amod`;
 
 {#if cur}
   {#snippet aSubs()}
-    <span class="mono">{cur!.model.subs.length} sub{cur!.model.subs.length === 1 ? '' : 's'}</span>
+    <span class="mono">{cur.model.subs.length} sub{cur.model.subs.length === 1 ? '' : 's'}</span>
   {/snippet}
   {#snippet pSubs()}
-    <SubstructuresView model={cur!.model} />
+    <SubstructuresView model={cur.model} />
   {/snippet}
 
   {#snippet aGraph()}
-    <span class="mono">{cur!.model.subs.length} sub{cur!.model.subs.length === 1 ? '' : 's'}</span>
+    <span class="mono">{cur.model.subs.length} sub{cur.model.subs.length === 1 ? '' : 's'}</span>
   {/snippet}
   {#snippet pGraph()}
-    <GraphView model={cur!.model} {layout} chosen={cur!.chosen} />
+    <GraphView model={cur.model} {layout} chosen={cur.chosen} />
   {/snippet}
 
   {#snippet aCands()}
-    <span class="mono">{cur!.candidates.length} candidate{cur!.candidates.length === 1 ? '' : 's'}</span>
+    <span class="mono">{cur.candidates.length} candidate{cur.candidates.length === 1 ? '' : 's'}</span>
   {/snippet}
   {#snippet pCands()}
-    <CandidatesTable candidates={cur!.candidates} baseline={cur!.cost} chosen={cur!.chosen} />
+    <CandidatesTable candidates={cur.candidates} baseline={cur.cost} chosen={cur.chosen} />
   {/snippet}
 
   {#snippet aCost()}
     <span class="mono">step {player.index}</span>
   {/snippet}
   {#snippet pCost()}
-    <CostPanel cost={cur!.cost} {reference} />
+    <CostPanel cost={cur.cost} {reference} />
   {/snippet}
 
   {#snippet pChart()}
@@ -243,7 +222,7 @@ hall:N grand:A amod`;
   {#snippet pInput()}
     <textarea
       class="edge-input mono scrollbar"
-      bind:value={text}
+      bind:value={settings.text}
       spellcheck="false"
       placeholder={'src:Label  dst:Label  EDGELABEL\none edge per line'}
     ></textarea>

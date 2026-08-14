@@ -90,11 +90,6 @@ export class PanelManager {
     return this.#defs.get(id);
   }
 
-  /** Panels in registration order (skips any unknown ids defensively). */
-  get panels(): PanelState[] {
-    return this.order.map((id) => this.states[id]).filter(Boolean);
-  }
-
   isFocused(id: string): boolean {
     return this.focusedId === id;
   }

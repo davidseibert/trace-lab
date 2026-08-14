@@ -86,6 +86,9 @@ export function matmul(a: Tensor, b: Tensor): Tensor {
       }
     out._children = [a, b];
     out._op = 'matmul';
+    // C = A·B  ⇒  dA = dC·Bᵀ, dB = Aᵀ·dC. Each loop below is one of those two
+    // products, written index-wise: dA[i,k] = Σⱼ dC[i,j]·B[k,j] (B read
+    // transposed), dB[k,j] = Σᵢ A[i,k]·dC[i,j] (A read transposed).
     out._backward = () => {
       for (let i = 0; i < M; i++)
         for (let k = 0; k < K; k++) {
@@ -122,6 +125,8 @@ export function matmul(a: Tensor, b: Tensor): Tensor {
   }
   out._children = [a, b];
   out._op = 'matmul3d';
+  // Same dA = dC·Bᵀ, dB = Aᵀ·dC as the 2D case, applied independently per batch
+  // slice (batches never mix, so the gradient is block-diagonal over B).
   out._backward = () => {
     for (let bb = 0; bb < B; bb++) {
       const aOff = bb * M * K;
@@ -153,6 +158,8 @@ export function add(a: Tensor, b: Tensor): Tensor {
   out._children = [a, b];
   out._op = 'add';
   out._backward = () => {
+    // Addition passes gradients through unchanged; the broadcast bias sums its
+    // gradient over the M rows it was copied to (transpose of broadcasting).
     for (let i = 0; i < a.data.length; i++) a.grad[i] += out.grad[i];
     for (let i = 0; i < M; i++) for (let j = 0; j < N; j++) b.grad[j] += out.grad[i * N + j];
   };
@@ -165,6 +172,8 @@ export function addElem(a: Tensor, b: Tensor): Tensor {
   for (let i = 0; i < a.data.length; i++) out.data[i] = a.data[i] + b.data[i];
   out._children = [a, b];
   out._op = 'addElem';
+  // d(a+b)/da = d(a+b)/db = I: the residual stream copies the upstream gradient
+  // to both branches — this is why gradients flow "straight down" a resnet.
   out._backward = () => {
     for (let i = 0; i < a.data.length; i++) {
       a.grad[i] += out.grad[i];
@@ -180,6 +189,7 @@ export function relu(a: Tensor): Tensor {
   out._children = [a];
   out._op = 'relu';
   out._backward = () => {
+    // relu'(x) = 1[x > 0]; gradient passes where the unit fired, else dies.
     for (let i = 0; i < a.data.length; i++) a.grad[i] += (out.data[i] > 0 ? 1 : 0) * out.grad[i];
   };
   return out;
@@ -204,12 +214,16 @@ export function scale(a: Tensor, s: number): Tensor {
 export function maskedSoftmax(a: Tensor, T: number): Tensor {
   const totalRows = a.data.length / T;
   const out = new Tensor(new Float64Array(a.data.length), [...a.shape]);
+  // Causal mask: row r within its [T,T] block is query position t = r % T; set
+  // scores for keys c > t to −1e9, so exp(·) ≈ 0 and future tokens get 0 weight.
   const masked = new Float64Array(a.data);
   for (let r = 0; r < totalRows; r++) {
     const rowInBlock = r % T;
     const off = r * T;
     for (let c = rowInBlock + 1; c < T; c++) masked[off + c] = -1e9;
   }
+  // Stable softmax: subtracting the row max leaves p unchanged (softmax is
+  // shift-invariant) but keeps every exp argument ≤ 0, so nothing overflows.
   for (let r = 0; r < totalRows; r++) {
     const off = r * T;
     let mx = -Infinity;
@@ -223,13 +237,19 @@ export function maskedSoftmax(a: Tensor, T: number): Tensor {
   }
   out._children = [a];
   out._op = 'maskedSoftmax';
+  // Softmax Jacobian ∂pᵢ/∂xⱼ = pᵢ(δᵢⱼ − pⱼ), applied as a JVP without ever
+  // forming it:  dxᵢ = pᵢ(dpᵢ − Σⱼ pⱼ dpⱼ).  The Σⱼ term is the coupling from
+  // the shared normaliser. Loops stop at rowInBlock: masked positions have
+  // p = 0 and receive no gradient (the −1e9 clamp is treated as constant).
   out._backward = () => {
     for (let r = 0; r < totalRows; r++) {
       const off = r * T;
       const rowInBlock = r % T;
+      // Σⱼ pⱼ dpⱼ doesn't depend on i, so compute it once per row — the
+      // backward is O(T) per row, matching the forward.
+      let dot = 0;
+      for (let j = 0; j <= rowInBlock; j++) dot += out.data[off + j] * out.grad[off + j];
       for (let i = 0; i <= rowInBlock; i++) {
-        let dot = 0;
-        for (let j = 0; j <= rowInBlock; j++) dot += out.data[off + j] * out.grad[off + j];
         a.grad[off + i] += out.data[off + i] * (out.grad[off + i] - dot);
       }
     }
@@ -246,6 +266,9 @@ export function layerNorm(a: Tensor, gamma: Tensor, beta: Tensor): Tensor {
   const vars = new Float64Array(T);
   const eps = 1e-5;
 
+  // Forward, per row t:  μ = mean(x), σ² = var(x) (biased, /D),
+  // x̂_d = (x_d − μ)/√(σ²+ε),  y_d = γ_d·x̂_d + β_d.
+  // μ and σ² are cached so backward doesn't recompute them.
   for (let t = 0; t < T; t++) {
     const off = t * D;
     let mu = 0;
@@ -271,11 +294,19 @@ export function layerNorm(a: Tensor, gamma: Tensor, beta: Tensor): Tensor {
       const mu = means[t];
       const v = vars[t];
       const inv = 1 / Math.sqrt(v + eps);
+      // Parameter grads (summed over rows): dγ_d = Σ_t x̂·dy, dβ_d = Σ_t dy.
       for (let d = 0; d < D; d++) {
         const xnorm = (a.data[off + d] - mu) * inv;
         gamma.grad[d] += xnorm * out.grad[off + d];
         beta.grad[d] += out.grad[off + d];
       }
+      // Input grad: chain rule through x̂, μ, and σ². With dx̂_d = γ_d·dy_d, the
+      // three paths (direct, via μ, via σ²) collapse to the standard form
+      //   dx_d = (1/D)·inv·( D·dx̂_d − Σ_e dx̂_e − x̂_d · Σ_e dx̂_e·x̂_e )
+      // where here x̂·Σ(dx̂·x̂) is written as (x−μ)·inv²·Σ dx̂·(x−μ).
+      // The two subtracted sums enforce the constraints the forward imposed:
+      // output is invariant to shifting the row (mean removal) and to scaling
+      // it (variance normalisation), so gradients along 1 and x̂ are projected out.
       let dxnormSum = 0;
       let dxnormXSum = 0;
       for (let d = 0; d < D; d++) {
@@ -304,6 +335,8 @@ export function embeddingLookup(weight: Tensor, indices: number[]): Tensor {
   }
   out._children = [weight];
   out._op = 'embedding';
+  // Gather's transpose is scatter-add: row idx's grad accumulates from every
+  // position t that looked it up (+= handles repeated tokens correctly).
   out._backward = () => {
     for (let t = 0; t < T; t++) {
       const idx = indices[t];
@@ -340,6 +373,8 @@ export function crossEntropyLoss(logits: Tensor, targets: number[]): Tensor {
   const out = new Tensor(new Float64Array([loss]), [1]);
   out._children = [logits];
   out._op = 'crossEntropy';
+  // ∂(−log softmax(z)_y)/∂z_v = p_v − 1[v = y]; the softmax and log Jacobians
+  // cancel into this one line. The /T matches the mean over positions.
   out._backward = () => {
     for (let t = 0; t < T; t++) {
       const off = t * V;
@@ -360,6 +395,8 @@ export function crossEntropyLoss(logits: Tensor, targets: number[]): Tensor {
  * J-transport is computed exactly.
  */
 export function backward(root: Tensor, seedIndex = 0): void {
+  // DFS post-order: a node is pushed only after all its inputs, so `order` is a
+  // topological sort of the DAG (inputs before consumers).
   const visited = new Set<number>();
   const order: Tensor[] = [];
   function topo(node: Tensor) {
@@ -370,6 +407,9 @@ export function backward(root: Tensor, seedIndex = 0): void {
   }
   topo(root);
   for (const node of order) node.grad.fill(0);
+  // Seed ∂root[seedIndex]/∂root[seedIndex] = 1, then walk consumers-first so
+  // each node's grad is complete before its _backward distributes it. Every
+  // _backward uses +=, which sums contributions when a tensor feeds several ops.
   root.grad[seedIndex] = 1;
   for (let i = order.length - 1; i >= 0; i--) order[i]._backward();
 }

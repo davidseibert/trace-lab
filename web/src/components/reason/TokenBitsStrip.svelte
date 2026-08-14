@@ -5,35 +5,37 @@
    * the reasoning already paid for. Click to select a token.
    */
   import type { ReasonTok } from '../../lib/logit/api';
+  import { surprisal, thinkRegions } from '../../lib/reason';
 
   let {
     steps,
     selected,
-    onPick
+    onPick,
+    prefixText = null
   }: {
     steps: ReasonTok[];
     selected: number;
     onPick: (i: number) => void;
+    /** The templated prompt as one string — lets thinkRegions() see a think
+     * block the chat template pre-opened (DeepSeek-R1). */
+    prefixText?: string | null;
   } = $props();
 
   const W = 1000; // viewBox units; the SVG stretches to the panel
   const H = 120;
   const PAD = 4;
 
-  const surp = (s: ReasonTok) => -Math.log2(Math.max(s.p, 1e-30));
-  const maxBits = $derived(Math.max(4, ...steps.map(surp)));
+  const maxBits = $derived(Math.max(4, ...steps.map(surprisal)));
   const x = (i: number) => PAD + (i / Math.max(1, steps.length - 1)) * (W - 2 * PAD);
   const y = (b: number) => H - PAD - (Math.min(b, maxBits) / maxBits) * (H - 2 * PAD);
   const path = $derived(
-    steps.length < 2 ? '' : steps.map((s, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(surp(s)).toFixed(1)}`).join(' ')
+    steps.length < 2 ? '' : steps.map((s, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(surprisal(s)).toFixed(1)}`).join(' ')
   );
 
-  // Think-region span for the shaded backdrop.
+  // First think-region span (step indices) for the shaded backdrop.
   const thinkSpan = $derived.by(() => {
-    const a = steps.findIndex((s) => s.t === '<think>');
-    if (a < 0) return null;
-    const b = steps.findIndex((s) => s.t === '</think>');
-    return { a, b: b < 0 ? steps.length - 1 : b };
+    const span = thinkRegions(steps, prefixText).spans[0];
+    return span ? { a: span.start, b: span.end } : null;
   });
 
   function pick(e: MouseEvent) {
@@ -63,14 +65,14 @@
     {/if}
     {#if steps[selected]}
       <line x1={x(selected)} y1="0" x2={x(selected)} y2={H} class="cursor" />
-      <circle cx={x(selected)} cy={y(surp(steps[selected]))} r="3.5" class="dot" />
+      <circle cx={x(selected)} cy={y(surprisal(steps[selected]))} r="3.5" class="dot" />
     {/if}
   </svg>
   <div class="legend mono faint">
     <span><span class="chip think"></span> think</span>
     <span>peak {maxBits.toFixed(1)}b</span>
     {#if steps[selected]}
-      <span>#{steps[selected].pos} “{steps[selected].t}” {surp(steps[selected]).toFixed(2)}b</span>
+      <span>#{steps[selected].pos} “{steps[selected].t}” {surprisal(steps[selected]).toFixed(2)}b</span>
     {/if}
   </div>
 </div>

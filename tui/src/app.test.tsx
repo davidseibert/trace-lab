@@ -3,7 +3,7 @@
  * actually contain the lens.
  *
  * Skipped unless an engine is reachable, so `bun test` stays useful without a
- * GPU: start one with `make engine` and re-run.
+ * GPU: start one with `make up` and re-run.
  */
 import { createTestRenderer } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";

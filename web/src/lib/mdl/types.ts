@@ -20,6 +20,21 @@
  * implement `MdlProblem`, and the same `trace()` runner drives both.
  */
 
+/**
+ * Which code a lens charges per symbol/label reference — the same knob in
+ * every lens, so it lives here and each lens re-exports it:
+ *
+ *   'uniform' — every reference costs log2(V) bits, V = current vocabulary
+ *               size. Dead simple to reason about.
+ *   'shannon' — every reference costs -log2(p) bits, p = its empirical
+ *               frequency. Real entropy coding: frequent symbols get short
+ *               codes.
+ *
+ * Each lens's header comment tells the fuller story of what the toggle
+ * changes in that domain.
+ */
+export type CodeMode = 'uniform' | 'shannon';
+
 /** One labelled component of a description length, in bits. */
 export interface CostTerm {
   /** Human label, e.g. "compressed stream" or "rule bodies". */

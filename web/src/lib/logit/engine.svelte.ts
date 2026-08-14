@@ -33,7 +33,6 @@ export class EngineStore {
   /** Device string when reachable, null when the engine is offline/unknown. */
   device = $state<string | null>(null);
   models = $state<ModelInfo[]>(FALLBACK);
-  defaultModel = $state('gpt2');
   /** True once any /health has answered (so "offline" isn't shown pre-probe). */
   probed = $state(false);
 
@@ -50,7 +49,6 @@ export class EngineStore {
       const h = await fetchHealth();
       this.device = h.device;
       this.models = h.models;
-      this.defaultModel = h.default;
       return true;
     } catch {
       this.device = null;

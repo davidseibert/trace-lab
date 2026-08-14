@@ -10,14 +10,15 @@
   let {
     candidates,
     baseline,
-    chosen,
-    limit = 40
+    chosen
   }: {
     candidates: ScoredMove<M>[];
     baseline: CostBreakdown;
     chosen: ScoredMove<M> | null;
-    limit?: number;
   } = $props();
+
+  // Cap the rendered rows; the tail is summarized in a footer line.
+  const LIMIT = 40;
 
   // The candidate a frequency-greedy compressor (e.g. plain RePair) would pick:
   // the most occurrences, ignoring how much each occurrence actually saves.
@@ -31,7 +32,7 @@
     return best;
   });
 
-  const shown = $derived(candidates.slice(0, limit));
+  const shown = $derived(candidates.slice(0, LIMIT));
 </script>
 
 <div class="cands">
@@ -71,8 +72,8 @@
           </span>
         </div>
       {/each}
-      {#if candidates.length > limit}
-        <div class="more faint">… {candidates.length - limit} more not shown</div>
+      {#if candidates.length > LIMIT}
+        <div class="more faint">… {candidates.length - LIMIT} more not shown</div>
       {/if}
     </div>
     {#if mostFrequent && chosen && mostFrequent !== chosen}
