@@ -21,6 +21,7 @@
   import TopBar from './shell/TopBar.svelte';
   import TransportBar from './shell/TransportBar.svelte';
   import EngineOffline from './shell/EngineOffline.svelte';
+  import EngineStatus from './shell/EngineStatus.svelte';
   import DepthChart from './logit/DepthChart.svelte';
   import TraceView from './reason/TraceView.svelte';
   import TokenBitsStrip from './reason/TokenBitsStrip.svelte';
@@ -84,10 +85,6 @@
   let rung = $state(0); // depth cursor within the selected column
   let abort: AbortController | null = null;
 
-  $effect(() => {
-    void engine.check();
-  });
-
   async function run() {
     if (streaming || !prompt.trim()) return;
     streaming = true;
@@ -112,9 +109,7 @@
             meta = ev;
             rung = ev.layers.length - 1; // start at the top rung, like Logit·real
           } else if (ev.event === 'tok') {
-            const follow = player.atEnd;
-            player.steps.push(ev);
-            if (follow) player.index = player.steps.length - 1;
+            player.append(ev);
           } else if (ev.event === 'done') {
             doneReason = ev.reason;
           } else {
@@ -372,9 +367,7 @@
     </button>
   {/if}
 
-  <span class="status mono" class:off={!engine.up} title="engine service (engine/, port 5181)">
-    {engine.up ? `engine · ${engine.device}` : 'engine offline'}
-  </span>
+  <EngineStatus />
 </TopBar>
 
 {#if !engine.up && !meta}
@@ -542,8 +535,6 @@
   .budget { width: 64px; }
   .temp { width: 52px; }
   .seedinp { width: 88px; }
-
-  .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
 
   .readout { display: flex; flex-direction: column; gap: 12px; overflow: auto; min-height: 0; }
   .group { display: flex; flex-direction: column; gap: 4px; }

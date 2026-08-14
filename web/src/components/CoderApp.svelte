@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
   import { Player } from '../lib/player.svelte';
   import { PanelManager } from '../lib/panels/panels.svelte';
   import {
@@ -121,11 +120,7 @@
   // so changing the training step (or model/phase) holds the step you're on
   // instead of snapping back to 0. The two timelines stay independent.
   $effect(() => {
-    const steps = activeSteps;
-    untrack(() => {
-      player.steps = steps;
-      player.seek(player.index);
-    });
+    player.reload(activeSteps);
   });
 
   const cur = $derived(player.current);
@@ -290,6 +285,4 @@
 
   .readout { display: flex; flex-direction: column; gap: 6px; }
   .say { margin: 0; font-size: 12.5px; line-height: 1.45; }
-
-  .empty { flex: 1 1 auto; display: grid; place-items: center; }
 </style>

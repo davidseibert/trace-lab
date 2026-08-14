@@ -5,6 +5,7 @@
    * the reasoning already paid for. Click to select a token.
    */
   import type { ReasonTok } from '../../lib/logit/api';
+  import { chartScale } from '../../lib/chart';
   import { surprisal, thinkRegions } from '../../lib/reason';
 
   let {
@@ -23,14 +24,13 @@
 
   const W = 1000; // viewBox units; the SVG stretches to the panel
   const H = 120;
-  const PAD = 4;
+  const PAD = 4; // slim uniform frame — this strip hugs its panel
 
   const maxBits = $derived(Math.max(4, ...steps.map(surprisal)));
-  const x = (i: number) => PAD + (i / Math.max(1, steps.length - 1)) * (W - 2 * PAD);
-  const y = (b: number) => H - PAD - (Math.min(b, maxBits) / maxBits) * (H - 2 * PAD);
-  const path = $derived(
-    steps.length < 2 ? '' : steps.map((s, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(surprisal(s)).toFixed(1)}`).join(' ')
+  const scale = $derived(
+    chartScale({ n: steps.length, max: maxBits, W, H, pad: { l: PAD, r: PAD, t: PAD, b: PAD } })
   );
+  const path = $derived(steps.length < 2 ? '' : scale.path(steps.map(surprisal)));
 
   // First think-region span (step indices) for the shaded backdrop.
   const thinkSpan = $derived.by(() => {
@@ -39,11 +39,7 @@
   });
 
   function pick(e: MouseEvent) {
-    const el = e.currentTarget as SVGSVGElement;
-    const r = el.getBoundingClientRect();
-    const fx = ((e.clientX - r.left) / r.width) * W;
-    const i = Math.round(((fx - PAD) / (W - 2 * PAD)) * (steps.length - 1));
-    onPick(Math.max(0, Math.min(steps.length - 1, i)));
+    onPick(scale.indexAt(e.clientX, e.currentTarget as Element));
   }
 </script>
 
@@ -53,9 +49,9 @@
     aria-label="per-token code length">
     {#if thinkSpan}
       <rect
-        x={x(thinkSpan.a)}
+        x={scale.xAt(thinkSpan.a)}
         y="0"
-        width={x(thinkSpan.b) - x(thinkSpan.a)}
+        width={scale.xAt(thinkSpan.b) - scale.xAt(thinkSpan.a)}
         height={H}
         class="thinkband"
       />
@@ -64,8 +60,8 @@
       <path d={path} class="curve" />
     {/if}
     {#if steps[selected]}
-      <line x1={x(selected)} y1="0" x2={x(selected)} y2={H} class="cursor" />
-      <circle cx={x(selected)} cy={y(surprisal(steps[selected]))} r="3.5" class="dot" />
+      <line x1={scale.xAt(selected)} y1="0" x2={scale.xAt(selected)} y2={H} class="cursor" />
+      <circle cx={scale.xAt(selected)} cy={scale.yAt(surprisal(steps[selected]))} r="3.5" class="dot" />
     {/if}
   </svg>
   <div class="legend mono faint">

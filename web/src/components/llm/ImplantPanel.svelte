@@ -192,6 +192,8 @@
     font-size: 10.5px; padding: 2px 5px; border-radius: 4px;
   }
   .thead { font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; }
+  /* Deliberately softer than the shared .row.chosen highlight (app.css):
+     the ★ row is a persistent marker here, not a one-step pick. */
   .trow.isfact { background: rgba(255, 209, 102, 0.08); outline: 1px solid rgba(255, 209, 102, 0.25); }
   .trow.touched { opacity: 0.85; }
   .ow { color: var(--chosen); margin-right: 4px; }

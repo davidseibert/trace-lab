@@ -12,11 +12,10 @@
 /** Compose injects this; falls back to a locally-run `uvicorn main:app`. */
 export const ENGINE_URL = process.env.LENS_ENGINE ?? "http://127.0.0.1:5181";
 
-/** One vocabulary entry of a top-k readout. */
-export interface TopTok {
-  t: string;
-  p: number;
-}
+/** The wire types are shared with the web client — web/src/lib/logit/api.ts
+ * is canonical (type-only import, erased at runtime under bun). */
+export type { TopTok, LensResponse, ColumnResponse } from "../../web/src/lib/logit/api";
+import type { LensResponse, ColumnResponse } from "../../web/src/lib/logit/api";
 
 export interface EngineHealth {
   ok: boolean;
@@ -24,43 +23,6 @@ export interface EngineHealth {
   loaded: string[];
   models: string[];
   default: string;
-}
-
-export interface LensResponse {
-  model: string;
-  prompt: string;
-  /** Input tokens as display strings. */
-  tokens: string[];
-  /** Row names: ["embed", "layer 0", …, "final"]. */
-  layers: string[];
-  /** grid[layer][pos] = top-k classic-lens readout at that cell. */
-  grid: TopTok[][][];
-  /** −log₂ p(model's final top-1) per layer, at the prediction position. */
-  bits: number[];
-  /** Same, under the J-lens decode (null if jlens was off). */
-  jbits: number[] | null;
-  /** jtop[layer] = top-k of the J-decode at the prediction position. */
-  jtop: TopTok[][] | null;
-  /** The model's real next-token prediction. */
-  pred: { token: string; p: number; bits: number };
-  /** log₂(vocab) — the knows-nothing reference cost. */
-  uniform: number;
-  /** tokens[:n_prompt] are the prompt; the rest are server-side rollout. */
-  n_prompt: number;
-}
-
-/** The depth ladder at one selected column — what /lens carries for the last
- * column, recomputed server-side for any other on selection. */
-export interface ColumnResponse {
-  model: string;
-  prompt: string;
-  pos: number;
-  /** The model's real prediction *after* this column. */
-  pred: { token: string; p: number; bits: number };
-  bits: number[];
-  jbits: number[] | null;
-  jtop: TopTok[][] | null;
-  uniform: number;
 }
 
 export async function fetchHealth(): Promise<EngineHealth> {

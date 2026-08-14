@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { CostBreakdown } from '../lib/mdl/types';
   import { fmt } from '../lib/mdl/format';
+  import { chartScale } from '../lib/chart';
 
   // Any lens whose steps carry a CostBreakdown can drive this chart (grammar,
   // morphology merge, Morfessor split).
@@ -16,7 +17,6 @@
 
   const W = 520;
   const H = 180;
-  const PAD = { l: 6, r: 6, t: 10, b: 16 };
 
   const series = $derived.by(() => {
     const total = steps.map((s) => s.cost.total);
@@ -27,19 +27,10 @@
   });
 
   const n = $derived(steps.length);
-  const xAt = (i: number) =>
-    PAD.l + (n <= 1 ? 0 : (i / (n - 1)) * (W - PAD.l - PAD.r));
-  const yAt = (v: number) =>
-    H - PAD.b - (v / series.max) * (H - PAD.t - PAD.b);
-
-  const path = (arr: number[]) =>
-    arr.map((v, i) => `${i === 0 ? 'M' : 'L'} ${xAt(i).toFixed(1)} ${yAt(v).toFixed(1)}`).join(' ');
+  const scale = $derived(chartScale({ n, max: series.max, W, H }));
 
   function handleClick(e: MouseEvent) {
-    const rect = (e.currentTarget as SVGElement).getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * W;
-    const frac = (x - PAD.l) / (W - PAD.l - PAD.r);
-    onSeek(Math.round(frac * (n - 1)));
+    onSeek(scale.indexAt(e.clientX, e.currentTarget as Element));
   }
 </script>
 
@@ -54,14 +45,14 @@
 
   <svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" onclick={handleClick} role="presentation">
     <!-- current-step marker -->
-    <line x1={xAt(index)} x2={xAt(index)} y1={PAD.t} y2={H - PAD.b} class="marker" />
+    <line x1={scale.xAt(index)} x2={scale.xAt(index)} y1={scale.top} y2={scale.bottom} class="marker" />
 
-    <path d={path(series.data)} class="line data" />
-    <path d={path(series.model)} class="line model" />
-    <path d={path(series.total)} class="line total" />
+    <path d={scale.path(series.data)} class="line data" />
+    <path d={scale.path(series.model)} class="line model" />
+    <path d={scale.path(series.total)} class="line total" />
 
     {#each steps as _, i}
-      <circle cx={xAt(i)} cy={yAt(series.total[i])} r={i === index ? 4 : 2.2}
+      <circle cx={scale.xAt(i)} cy={scale.yAt(series.total[i])} r={i === index ? 4 : 2.2}
               class="dot" class:active={i === index} />
     {/each}
   </svg>

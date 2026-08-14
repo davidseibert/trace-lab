@@ -23,7 +23,7 @@ import json
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from lens import (ablate_report, attn_report, column_report, lens_report, load_model,
@@ -154,6 +154,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# App-wide error convention: ValueError = the caller's fault (bad prompt/pos/
+# ids) → 400; RuntimeError = the engine's fault (CUDA, hooks, OOM) → 500.
+# The SSE generators are the one exception — headers are already sent by the
+# time they fail, so they emit an in-stream error event instead (see _sse).
+@app.exception_handler(ValueError)
+def _caller_fault(request, exc):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(RuntimeError)
+def _engine_fault(request, exc):
+    return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+
 # Keep only a bounded set of models resident. Unbounded, every model you ever
 # load stays on the GPU -- and once VRAM fills, Windows/WDDM spills into shared
 # system memory and the whole machine hitches for seconds. So LRU-evict the
@@ -233,10 +248,7 @@ def _render(tok, req) -> str:  # any request with .chat / .prompt / .thinking
     """The text actually lensed: the raw prompt, or its chat-templated form."""
     if not req.chat:
         return req.prompt
-    try:
-        return render_chat(tok, req.prompt, thinking=req.thinking)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+    return render_chat(tok, req.prompt, thinking=req.thinking)
 
 
 @app.get("/")
@@ -262,16 +274,11 @@ def health():
 @app.post("/lens")
 def lens(req: LensRequest):
     model, tok, _device = _get(req.model)
-    try:
-        report = lens_report(
-            model, tok, _render(tok, req), top_k=req.top_k, jlens=req.jlens, rollout=req.rollout
-        )
-    except ValueError as e:
-        # A prompt the model can't index (too long / out of vocab). Caught on
-        # CPU by _preflight before it could poison the CUDA context.
-        raise HTTPException(400, str(e))
-    except RuntimeError as e:
-        raise HTTPException(500, str(e))
+    # ValueError here = a prompt the model can't index (too long / out of
+    # vocab), caught on CPU by _preflight before it could poison CUDA.
+    report = lens_report(
+        model, tok, _render(tok, req), top_k=req.top_k, jlens=req.jlens, rollout=req.rollout
+    )
     return {"model": req.model, "prompt": req.prompt, **asdict(report)}
 
 
@@ -290,6 +297,18 @@ class ChatRequest(BaseModel):
     seed: int | None = Field(default=None, ge=0)
 
 
+def _sse(events):
+    """data:-frame an event iterator as Server-Sent Events. Exceptions become
+    an in-stream error event — by the time a generator fails the 200 and its
+    headers are already on the wire, so the app-level handlers can't fire and
+    SSE can't change status."""
+    try:
+        for ev in events:
+            yield f"data: {json.dumps(ev)}\n\n"
+    except Exception as e:
+        yield f"data: {json.dumps({'event': 'error', 'detail': str(e)})}\n\n"
+
+
 @app.post("/chat")
 def chat(req: ChatRequest):
     """Stream a greedy decode as Server-Sent Events, one per token, each
@@ -298,19 +317,10 @@ def chat(req: ChatRequest):
     (same prompt + chat flags, rollout = tokens generated so far)."""
     model, tok, _device = _get(req.model)
     text = _render(tok, req)
-
-    def gen():
-        try:
-            for ev in reason_events(model, tok, text, max_new=req.max_new,
-                                    temperature=req.temperature, seed=req.seed):
-                yield f"data: {json.dumps(ev)}\n\n"
-        except ValueError as e:
-            yield f"data: {json.dumps({'event': 'error', 'detail': str(e)})}\n\n"
-        except RuntimeError as e:
-            yield f"data: {json.dumps({'event': 'error', 'detail': str(e)})}\n\n"
-
-    return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache"})
+    return StreamingResponse(
+        _sse(reason_events(model, tok, text, max_new=req.max_new,
+                           temperature=req.temperature, seed=req.seed)),
+        media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 
 class TrainRequest(BaseModel):
@@ -330,14 +340,16 @@ def train_endpoint(req: TrainRequest):
     if not _train_lock.acquire(blocking=False):
         raise HTTPException(409, "a training run is already in progress")
 
+    def events():
+        # Deferred import inside the generator, so an import failure surfaces
+        # through _sse as an error event rather than a broken stream.
+        from train import train_run
+
+        yield from train_run(epochs=req.epochs, out=LOCAL_DIR)
+
     def gen():
         try:
-            from train import train_run
-
-            for ev in train_run(epochs=req.epochs, out=LOCAL_DIR):
-                yield f"data: {json.dumps(ev)}\n\n"
-        except Exception as e:  # surfaced in-stream; SSE can't change status
-            yield f"data: {json.dumps({'event': 'error', 'detail': str(e)})}\n\n"
+            yield from _sse(events())
         finally:
             for k in list(_cache):
                 if k.startswith("local/"):
@@ -367,14 +379,9 @@ def attn(req: AttnRequest):
     """Every head's attention row at one destination token, plus per-head
     stats (entropy, sink mass, top sources) and raw/value-weighted aggregates."""
     model, _tok, _device = _get(req.model)
-    try:
-        return {"model": req.model,
-                **attn_report(model, req.ids, req.pos,
-                              pick_layer=req.layer, pick_head=req.head)}
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except RuntimeError as e:
-        raise HTTPException(500, str(e))
+    return {"model": req.model,
+            **attn_report(model, req.ids, req.pos,
+                          pick_layer=req.layer, pick_head=req.head)}
 
 
 class AblateRequest(BaseModel):
@@ -394,14 +401,9 @@ def ablate(req: AblateRequest):
     the entire downstream computation. delta_bits is what reading that region
     actually bought."""
     model, tok, _device = _get(req.model)
-    try:
-        return {"model": req.model,
-                **ablate_report(model, tok, req.ids, req.pos, req.mask_start,
-                                req.mask_end, top_k=req.top_k)}
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except RuntimeError as e:
-        raise HTTPException(500, str(e))
+    return {"model": req.model,
+            **ablate_report(model, tok, req.ids, req.pos, req.mask_start,
+                            req.mask_end, top_k=req.top_k)}
 
 
 @app.post("/column")
@@ -413,15 +415,10 @@ def column(req: ColumnRequest):
     jlens, one JVP per rung.
     """
     model, tok, _device = _get(req.model)
-    try:
-        report = column_report(
-            model, tok, "" if req.ids is not None else _render(tok, req), req.pos,
-            top_k=req.top_k, jlens=req.jlens, rollout=req.rollout, ids=req.ids,
-        )
-    except ValueError as e:
-        # A prompt the model can't index, or pos past the end. Caught on CPU
-        # by _preflight / the range check before it could poison CUDA.
-        raise HTTPException(400, str(e))
-    except RuntimeError as e:
-        raise HTTPException(500, str(e))
+    # ValueError here = a prompt the model can't index, or pos past the end —
+    # caught on CPU by _preflight / the range check before it could poison CUDA.
+    report = column_report(
+        model, tok, "" if req.ids is not None else _render(tok, req), req.pos,
+        top_k=req.top_k, jlens=req.jlens, rollout=req.rollout, ids=req.ids,
+    )
     return {"model": req.model, "prompt": req.prompt, **asdict(report)}

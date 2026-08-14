@@ -8,7 +8,7 @@
   const maxCount = $derived(Math.max(1, ...rows.map((r) => r.count)));
 </script>
 
-<div class="corpus-view">
+<div class="corpus-view structure-view">
   <section class="block block--lex">
     <div class="block-head">
       <span class="panel-title"><span class="swatch" style="background:var(--model)"></span> Lexicon &nbsp;·&nbsp; L(M)</span>
@@ -53,12 +53,12 @@
 </div>
 
 <style>
-  /* Lexicon (model) | corpus (data), side by side, each scrolling on its own. */
+  /* Lexicon (model) | corpus (data), side by side, each scrolling on its own.
+     .block/.block-head/.words/.freq/.morphs + the chip vocabulary come from
+     the global structure-view rules in app.css. */
   .corpus-view { display: flex; flex-direction: row; gap: 12px; height: 100%; min-height: 0; }
-  .block { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
   .block--lex { flex: 1 1 0; }
   .block--words { flex: 1 1 0; }
-  .block-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; flex: 0 0 auto; }
 
   .lex { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; min-height: 0; flex: 1 1 auto; padding-right: 4px; }
   .lexrow { display: grid; grid-template-columns: auto 1fr auto auto; gap: 7px; align-items: center; padding: 1px 0; }
@@ -67,28 +67,8 @@
   .cnt { font-size: 11px; min-width: 22px; text-align: right; }
   .cost { font-size: 10.5px; min-width: 34px; text-align: right; }
 
-  .words {
-    display: flex; flex-direction: column; gap: 2px;
-    overflow-y: auto; min-height: 0; flex: 1 1 auto;
-    align-content: flex-start;
-    padding: 6px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-sm);
-  }
   .word { display: flex; align-items: flex-start; gap: 8px; padding: 2px 4px; border-radius: 4px; }
   .word.focus { background: rgba(255, 209, 102, 0.12); outline: 1px solid rgba(255, 209, 102, 0.35); }
-  .freq { font-size: 11px; min-width: 28px; text-align: right; flex: 0 0 auto; padding-top: 4px; }
-  .morphs { display: flex; flex-wrap: wrap; gap: 3px; min-width: 0; }
-
-  .chip {
-    font-family: var(--mono);
-    font-size: 12px;
-    line-height: 1;
-    padding: 4px 6px;
-    border: 1px solid;
-    border-radius: 4px;
-    white-space: pre;
-    user-select: none;
-  }
-  .rulechip { font-weight: 700; }
 
   @media (max-width: 720px) {
     .corpus-view { flex-direction: column; }

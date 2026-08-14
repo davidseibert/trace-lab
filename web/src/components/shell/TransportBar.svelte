@@ -2,7 +2,9 @@
   /**
    * The shared transport strip: playback controls + the status note. Pass
    * `converged` to tint the note green (an MDL search that ran out of paying
-   * moves, a coder at the end of its stream, …).
+   * moves, a coder at the end of its stream, …). Omit `player` for a
+   * note-only bar — a lens with nothing to scrub (Train·real) still ends in
+   * the same strip as every other lens.
    */
   import type { Snippet } from 'svelte';
   import type { Player } from '../../lib/player.svelte';
@@ -14,7 +16,7 @@
     converged = false,
     children
   }: {
-    player: Player<unknown>;
+    player?: Player<unknown>;
     note?: string;
     converged?: boolean;
     /** Optional rich note content; wins over `note` when provided. */
@@ -23,7 +25,7 @@
 </script>
 
 <div class="panel transport-panel">
-  <Controls {player} />
+  {#if player}<Controls {player} />{/if}
   <div class="note mono" class:converged title={note}>
     {#if children}{@render children()}{:else}{note}{/if}
   </div>

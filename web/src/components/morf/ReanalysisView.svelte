@@ -12,7 +12,7 @@
   const focus = $derived(step.focusWord !== null ? step.model.words[step.focusWord] : null);
 </script>
 
-<div class="reanalysis">
+<div class="reanalysis structure-view">
   {#if !focus}
     <p class="muted empty">
       Converged — a full pass over the word list found no cut that lowers the total.
@@ -72,22 +72,15 @@
   .surface { font-size: 14px; font-weight: 700; color: var(--text); }
 
   .table { display: flex; flex-direction: column; overflow-y: auto; min-height: 0; flex: 1 1 auto; font-size: 12px; }
+  /* .row.chosen, .tag/.tag.pick and the chip vocabulary come from the global
+     structure-view rules in app.css. */
   .row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 3px 6px; border-radius: 4px; }
   .head-row { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; position: sticky; top: 0; background: var(--panel); }
   .row:not(.head-row):hover { background: var(--panel-2); }
-  .row.chosen { background: rgba(255, 209, 102, 0.1); outline: 1px solid rgba(255, 209, 102, 0.3); }
   .r { text-align: right; justify-self: end; }
   .total { font-weight: 700; }
   .seg { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 0; }
 
-  .chip {
-    font-family: var(--mono); font-size: 12px; line-height: 1; padding: 3px 5px;
-    border: 1px solid; border-radius: 4px; white-space: pre; user-select: none;
-  }
-  .rulechip { font-weight: 700; }
-
-  .tag { font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px; letter-spacing: 0.04em; }
-  .tag.pick { background: var(--chosen); color: #1a1400; margin-right: 4px; }
   .tag.cur { background: var(--border-2); color: var(--muted); margin-left: 4px; }
 
   .insight { flex: 0 0 auto; font-size: 11.5px; line-height: 1.4; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 7px 9px; margin: 0; }

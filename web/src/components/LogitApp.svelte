@@ -15,6 +15,7 @@
   import TopBar from './shell/TopBar.svelte';
   import TransportBar from './shell/TransportBar.svelte';
   import EngineOffline from './shell/EngineOffline.svelte';
+  import EngineStatus from './shell/EngineStatus.svelte';
   import LayerGrid from './logit/LayerGrid.svelte';
   import DepthChart from './logit/DepthChart.svelte';
 
@@ -96,14 +97,6 @@
       loading = false;
     }
   }
-
-  // On entry: if the engine is up, run the restored/default prompt so the lens
-  // is alive (deterministic, so a URL-restored run reproduces itself).
-  $effect(() => {
-    engine.check().then((ok) => {
-      if (ok && !resp) void run();
-    });
-  });
 
   function pick(row: number, pos: number) {
     player.seek(row);
@@ -213,9 +206,9 @@
     <span class="hint mono" title={selInfo.note}>ℹ {selInfo.note}</span>
   {/if}
 
-  <span class="status mono" class:off={!engine.up} title="engine service (engine/, port 5181)">
-    {engine.up ? `engine · ${engine.device}` : 'engine offline'}
-  </span>
+  <!-- On entry: if the engine is up, run the restored/default prompt so the
+       lens is alive (deterministic, so a URL-restored run reproduces itself). -->
+  <EngineStatus onProbe={(ok) => { if (ok && !resp) void run(); }} />
 </TopBar>
 
 {#if !engine.up && !resp}
@@ -318,8 +311,6 @@
 <style>
   .rollout { width: 52px; }
   .hint { max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
-
-  .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
 
   .readout { display: flex; flex-direction: column; gap: 12px; overflow: auto; min-height: 0; }
   .group { display: flex; flex-direction: column; gap: 4px; }

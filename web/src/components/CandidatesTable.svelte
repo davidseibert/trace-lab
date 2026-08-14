@@ -35,7 +35,7 @@
   const shown = $derived(candidates.slice(0, LIMIT));
 </script>
 
-<div class="cands">
+<div class="cands structure-view">
   {#if candidates.length === 0}
     <p class="muted empty">No repeated structure remains. Nothing left to compress — converged.</p>
   {:else}
@@ -97,15 +97,14 @@
     gap: 8px; align-items: center;
     padding: 3px 6px; border-radius: 4px;
   }
+  /* .row.chosen and .tag/.tag.pick come from the global structure-view rules
+     in app.css. */
   .row.head { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; position: sticky; top: 0; background: var(--panel); }
   .row:not(.head):hover { background: var(--panel-2); }
-  .row.chosen { background: rgba(255, 209, 102, 0.1); outline: 1px solid rgba(255, 209, 102, 0.3); }
   .r { text-align: right; justify-self: end; }
   .total { font-weight: 700; }
   .exp { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tag { font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px; letter-spacing: 0.04em; margin-right: 4px; }
-  .tag.pick { background: var(--chosen); color: #1a1400; }
-  .tag.freq { background: var(--border-2); color: var(--muted); margin-left: 4px; }
+  .tag.freq { background: var(--border-2); color: var(--muted); margin: 0 4px; }
   .more { padding: 6px; font-size: 11px; }
   .insight { flex: 0 0 auto; font-size: 11.5px; line-height: 1.4; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 7px 9px; margin: 0; }
 </style>

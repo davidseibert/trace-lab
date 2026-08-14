@@ -17,28 +17,17 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
+/** Engine wire types — web/src/lib/logit/api.ts is canonical (type-only
+ * import, erased at runtime under bun). */
+import type {
+  TopTok,
+  LensResponse,
+  ColumnResponse,
+  AttnResponse,
+} from "../web/src/lib/logit/api";
+
 const SPECTATE_URL = process.env.TUI_SPECTATE ?? "http://127.0.0.1:5182";
 const ENGINE_URL = process.env.LENS_ENGINE ?? "http://127.0.0.1:5181";
-
-/** One vocabulary entry of a top-k readout (mirrors tui/src/api.ts). */
-interface TopTok {
-  t: string;
-  p: number;
-}
-
-interface LensResponse {
-  model: string;
-  prompt: string;
-  tokens: string[];
-  layers: string[];
-  grid: TopTok[][][];
-  bits: number[];
-  jbits: number[] | null;
-  jtop: TopTok[][] | null;
-  pred: { token: string; p: number; bits: number };
-  uniform: number;
-  n_prompt: number;
-}
 
 /** The spectate sidecar's /state payload (shape defined in tui/src/App.tsx). */
 interface SpectateState {
@@ -291,16 +280,11 @@ server.registerTool(
   },
   async ({ prompt, pos, model, jlens, rollout, chat, thinking, ids, top_k }) => {
     try {
-      const c = await postJson<{
-        model: string;
-        prompt: string;
-        pos: number;
-        pred: { token: string; p: number; bits: number };
-        bits: number[];
-        jbits: number[] | null;
-        jtop: TopTok[][] | null;
-        uniform: number;
-      }>(`${ENGINE_URL}/column`, { prompt, pos, model, jlens, rollout, chat, thinking, ids, top_k }, ENGINE_HINT);
+      const c = await postJson<ColumnResponse>(
+        `${ENGINE_URL}/column`,
+        { prompt, pos, model, jlens, rollout, chat, thinking, ids, top_k },
+        ENGINE_HINT,
+      );
       return ok({
         ...c,
         pred: { ...c.pred, p: round(c.pred.p, 4), bits: round(c.pred.bits, 2) },
@@ -336,12 +320,7 @@ server.registerTool(
   },
   async ({ model, ids, pos, layer, head, top }) => {
     try {
-      const a = await postJson<{
-        seq: number; n_layers: number; n_heads: number;
-        agg: number[]; vagg: number[];
-        heads: { layer: number; head: number; entropy: number; sink: number; top: { pos: number; w: number; vw: number }[] }[];
-        picked: { vrow: number[] } | null;
-      }>(`${ENGINE_URL}/attn`, { model, ids, pos, layer, head }, ENGINE_HINT);
+      const a = await postJson<AttnResponse>(`${ENGINE_URL}/attn`, { model, ids, pos, layer, head }, ENGINE_HINT);
       const rank = (v: number[]) =>
         v.map((w, i) => ({ pos: i, w: round(w, 5) })).sort((x, y) => y.w - x.w).slice(0, top);
       return ok({

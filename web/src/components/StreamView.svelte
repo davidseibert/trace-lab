@@ -32,7 +32,7 @@
   });
 </script>
 
-<div class="stream-view">
+<div class="stream-view structure-view">
   <section class="block block--rules">
     <div class="block-head">
       <span class="panel-title"><span class="swatch" style="background:var(--model)"></span> Dictionary &nbsp;·&nbsp; L(M)</span>
@@ -87,11 +87,11 @@
 </div>
 
 <style>
+  /* .block/.block-head + the chip vocabulary come from the global
+     structure-view rules in app.css. */
   .stream-view { display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; }
-  .block { display: flex; flex-direction: column; min-height: 0; }
   .block--rules { flex: 0 1 auto; max-height: 42%; }
   .block--stream { flex: 1 1 auto; }
-  .block-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex: 0 0 auto; }
   .empty { font-size: 12.5px; margin: 4px 0; }
 
   .rules { display: flex; flex-direction: column; gap: 5px; overflow-y: auto; min-height: 0; padding-right: 4px; }
@@ -107,22 +107,5 @@
     padding: 8px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-sm);
   }
 
-  .chip {
-    font-family: var(--mono);
-    font-size: 12px;
-    line-height: 1;
-    padding: 4px 6px;
-    border: 1px solid;
-    border-radius: 4px;
-    white-space: pre;
-    user-select: none;
-  }
-  .rulechip { font-weight: 700; }
-  .stream-chip { transition: outline 0.1s, transform 0.1s; }
-  .hot {
-    outline: 2px solid var(--chosen);
-    outline-offset: 1px;
-    z-index: 1;
-  }
   .next-note { font-size: 12.5px; margin: 8px 0 0; }
 </style>

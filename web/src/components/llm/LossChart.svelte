@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { LlmStep } from '../../lib/llm/trainTrace';
+  import { chartScale } from '../../lib/chart';
 
   let {
     steps,
@@ -13,32 +14,24 @@
 
   const W = 520;
   const H = 180;
-  const PAD = { l: 8, r: 8, t: 12, b: 16 };
 
   const series = $derived(steps.map((s) => s.loss));
   const max = $derived(Math.max(1e-6, ...series));
   const n = $derived(steps.length);
+  const scale = $derived(chartScale({ n, max, W, H }));
 
-  const xAt = (i: number) => PAD.l + (n <= 1 ? 0 : (i / (n - 1)) * (W - PAD.l - PAD.r));
-  const yAt = (v: number) => H - PAD.b - (v / max) * (H - PAD.t - PAD.b);
-
-  const path = $derived(
-    series.map((v, i) => `${i === 0 ? 'M' : 'L'} ${xAt(i).toFixed(1)} ${yAt(v).toFixed(1)}`).join(' ')
-  );
+  const path = $derived(scale.path(series));
 
   function handleClick(e: MouseEvent) {
-    const rect = (e.currentTarget as SVGElement).getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * W;
-    const frac = (x - PAD.l) / (W - PAD.l - PAD.r);
-    onSeek(Math.round(frac * (n - 1)));
+    onSeek(scale.indexAt(e.clientX, e.currentTarget as Element));
   }
 </script>
 
 <div class="chart">
   <svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" onclick={handleClick} role="presentation">
-    <line x1={xAt(index)} x2={xAt(index)} y1={PAD.t} y2={H - PAD.b} class="marker" />
+    <line x1={scale.xAt(index)} x2={scale.xAt(index)} y1={scale.top} y2={scale.bottom} class="marker" />
     <path d={path} class="line" />
-    <circle cx={xAt(index)} cy={yAt(series[index] ?? 0)} r="4" class="dot" />
+    <circle cx={scale.xAt(index)} cy={scale.yAt(series[index] ?? 0)} r="4" class="dot" />
   </svg>
 
   <div class="xaxis">

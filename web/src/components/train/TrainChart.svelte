@@ -4,6 +4,8 @@
    * one frame: loss normalized to its own max (data-colored), accuracy on a
    * fixed 0–1 scale (total-colored) — the crossing point is the fun part.
    */
+  import { chartScale } from '../../lib/chart';
+
   let {
     rows
   }: {
@@ -12,18 +14,13 @@
 
   const W = 520;
   const H = 180;
-  const PAD = { l: 6, r: 6, t: 10, b: 16 };
 
   const maxLoss = $derived(Math.max(0.001, ...rows.map((r) => r.loss)));
   const n = $derived(rows.length);
 
-  const xAt = (i: number) =>
-    PAD.l + (n <= 1 ? 0 : (i / (n - 1)) * (W - PAD.l - PAD.r));
-  const yLoss = (v: number) => H - PAD.b - (v / maxLoss) * (H - PAD.t - PAD.b);
-  const yAcc = (v: number) => H - PAD.b - v * (H - PAD.t - PAD.b);
-
-  const path = (ys: number[]) =>
-    ys.map((y, i) => `${i === 0 ? 'M' : 'L'} ${xAt(i).toFixed(1)} ${y.toFixed(1)}`).join(' ');
+  // same frame, two value scales: loss vs its own max, accuracy vs 1.
+  const lossScale = $derived(chartScale({ n, max: maxLoss, W, H }));
+  const accScale = $derived(chartScale({ n, max: 1, W, H }));
 
   const last = $derived(rows[rows.length - 1]);
 </script>
@@ -39,14 +36,14 @@
   {#if n > 0}
     <svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" role="presentation">
       <!-- 50% and 100% accuracy guides — the checkpoint thresholds -->
-      <line x1={PAD.l} x2={W - PAD.r} y1={yAcc(0.5)} y2={yAcc(0.5)} class="guide" />
-      <line x1={PAD.l} x2={W - PAD.r} y1={yAcc(1)} y2={yAcc(1)} class="guide" />
+      <line x1={accScale.left} x2={accScale.right} y1={accScale.yAt(0.5)} y2={accScale.yAt(0.5)} class="guide" />
+      <line x1={accScale.left} x2={accScale.right} y1={accScale.yAt(1)} y2={accScale.yAt(1)} class="guide" />
 
-      <path d={path(rows.map((r) => yLoss(r.loss)))} class="line data" />
-      <path d={path(rows.map((r) => yAcc(r.acc)))} class="line total" />
+      <path d={lossScale.path(rows.map((r) => r.loss))} class="line data" />
+      <path d={accScale.path(rows.map((r) => r.acc))} class="line total" />
 
       {#each rows as r, i}
-        <circle cx={xAt(i)} cy={yAcc(r.acc)} r={i === n - 1 ? 3.5 : 2} class="dot" />
+        <circle cx={accScale.xAt(i)} cy={accScale.yAt(r.acc)} r={i === n - 1 ? 3.5 : 2} class="dot" />
       {/each}
     </svg>
 

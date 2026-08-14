@@ -5,6 +5,8 @@
  * scrubbing backward, and slow-motion are all index manipulation.
  */
 
+import { untrack } from 'svelte';
+
 /**
  * Generic over the step element type `S`: the player only ever indexes into
  * `steps[]`, so it neither knows nor cares what a step contains. The MDL lens
@@ -29,6 +31,31 @@ export class Player<S> {
     this.pause();
     this.steps = steps;
     this.index = 0;
+  }
+
+  /**
+   * Swap in a recomputed trace but KEEP the current position (clamped) —
+   * unlike load(), which rewinds to 0. For lenses whose steps are re-derived
+   * from upstream controls while the playback cursor should hold still.
+   * Untracked so a caller inside an $effect depends only on the new steps it
+   * passes in, not on the playback position.
+   */
+  reload(steps: S[]) {
+    untrack(() => {
+      this.steps = steps;
+      this.seek(this.index);
+    });
+  }
+
+  /**
+   * Push one streamed step. If the cursor was sitting at the end (i.e. the
+   * user was following the live stream, not scrubbing back), advance it to
+   * the new last step; pass `follow = false` to never advance.
+   */
+  append(step: S, follow = true) {
+    const wasFollowing = this.atEnd;
+    this.steps.push(step);
+    if (follow && wasFollowing) this.index = this.steps.length - 1;
   }
 
   seek(i: number) {

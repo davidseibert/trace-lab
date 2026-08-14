@@ -11,6 +11,44 @@
 export const ENGINE_URL: string =
   (import.meta.env.VITE_ENGINE_URL as string | undefined) ?? 'http://127.0.0.1:5181';
 
+/** POST a JSON body to an engine endpoint. On a non-ok reply, surfaces the
+ * FastAPI error `detail` (falling back to the status text) as the thrown
+ * Error's message. */
+async function post(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
+  const res = await fetch(`${ENGINE_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal
+  });
+  if (!res.ok) {
+    const detail = await res.json().then((j) => j.detail ?? res.statusText).catch(() => res.statusText);
+    throw new Error(String(detail));
+  }
+  return res;
+}
+
+/** Yield the parsed JSON payload of each `data:` line in an SSE response body.
+ * Frames are blank-line separated; the buffer's tail may be a partial frame. */
+async function* sseEvents<T>(res: Response): AsyncGenerator<T> {
+  if (!res.body) throw new Error(res.statusText);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const frames = buf.split('\n\n');
+    buf = frames.pop() ?? '';
+    for (const frame of frames) {
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('data: ')) yield JSON.parse(line.slice(6)) as T;
+      }
+    }
+  }
+}
+
 /** One vocabulary entry of a top-k readout. */
 export interface TopTok {
   t: string;
@@ -106,15 +144,7 @@ export async function fetchLens(req: {
   /** Greedy-decode up to this many tokens server-side; the lens covers prompt+continuation. */
   rollout?: number;
 }): Promise<LensResponse> {
-  const res = await fetch(`${ENGINE_URL}/lens`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ top_k: 5, jlens: true, rollout: 0, ...req })
-  });
-  if (!res.ok) {
-    const detail = await res.json().then((j) => j.detail ?? res.statusText).catch(() => res.statusText);
-    throw new Error(String(detail));
-  }
+  const res = await post('/lens', { top_k: 5, jlens: true, rollout: 0, ...req });
   return res.json();
 }
 
@@ -175,32 +205,8 @@ export async function streamChat(
   onEvent: (ev: ReasonEvent) => void,
   signal?: AbortSignal
 ): Promise<void> {
-  const res = await fetch(`${ENGINE_URL}/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat: true, thinking: true, max_new: 512, ...req }),
-    signal
-  });
-  if (!res.ok || !res.body) {
-    const detail = await res.json().then((j) => j.detail ?? res.statusText).catch(() => res.statusText);
-    throw new Error(String(detail));
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    // SSE frames are blank-line separated; the tail may be a partial frame.
-    const frames = buf.split('\n\n');
-    buf = frames.pop() ?? '';
-    for (const frame of frames) {
-      for (const line of frame.split('\n')) {
-        if (line.startsWith('data: ')) onEvent(JSON.parse(line.slice(6)) as ReasonEvent);
-      }
-    }
-  }
+  const res = await post('/chat', { chat: true, thinking: true, max_new: 512, ...req }, signal);
+  for await (const ev of sseEvents<ReasonEvent>(res)) onEvent(ev);
 }
 
 /** /train stream events — the Train·real lens's live feed. */
@@ -261,35 +267,11 @@ export async function streamTrain(
   onEvent: (ev: TrainEvent) => void,
   signal?: AbortSignal
 ): Promise<void> {
-  const res = await fetch(`${ENGINE_URL}/train`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-    signal
-  });
-  if (!res.ok || !res.body) {
-    const detail = await res.json().then((j) => j.detail ?? res.statusText).catch(() => res.statusText);
-    throw new Error(String(detail));
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const frames = buf.split('\n\n');
-    buf = frames.pop() ?? '';
-    for (const frame of frames) {
-      for (const line of frame.split('\n')) {
-        if (line.startsWith('data: ')) onEvent(JSON.parse(line.slice(6)) as TrainEvent);
-      }
-    }
-  }
+  const res = await post('/train', req, signal);
+  for await (const ev of sseEvents<TrainEvent>(res)) onEvent(ev);
 }
 
-/** One head's stats at a destination position (from /attn). The wire also
- * carries each head's `top` source list — read by the MCP bridge, not here. */
+/** One head's stats at a destination position (from /attn). */
 export interface AttnHead {
   layer: number;
   head: number;
@@ -297,15 +279,20 @@ export interface AttnHead {
   entropy: number;
   /** Mass on position 0 (the attention-sink no-op). */
   sink: number;
+  /** The head's strongest sources: raw weight `w` and value-weighted `vw`. */
+  top: { pos: number; w: number; vw: number }[];
 }
 
-/** Only the /attn fields this client reads — the wire also carries `n_layers`
- * and the raw aggregate `agg` (both read by the MCP bridge). */
+/** The full /attn wire contract — canonical for every consumer (this client
+ * and the MCP bridge both import it; each reads the fields it needs). */
 export interface AttnResponse {
   model: string;
   pos: number;
   seq: number;
+  n_layers: number;
   n_heads: number;
+  /** Raw aggregate: mean attention received per source over all layers×heads. */
+  agg: number[];
   /** Value-weighted aggregate (a·‖v‖ renormalized) — discounts sink stares. */
   vagg: number[];
   heads: AttnHead[];
@@ -321,15 +308,7 @@ export async function fetchAttn(req: {
   layer?: number;
   head?: number;
 }): Promise<AttnResponse> {
-  const res = await fetch(`${ENGINE_URL}/attn`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req)
-  });
-  if (!res.ok) {
-    const detail = await res.json().then((j) => j.detail ?? res.statusText).catch(() => res.statusText);
-    throw new Error(String(detail));
-  }
+  const res = await post('/attn', req);
   return res.json();
 }
 
@@ -354,15 +333,7 @@ export async function fetchAblate(req: {
   mask_end: number;
   top_k?: number;
 }): Promise<AblateResponse> {
-  const res = await fetch(`${ENGINE_URL}/ablate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req)
-  });
-  if (!res.ok) {
-    const detail = await res.json().then((j) => j.detail ?? res.statusText).catch(() => res.statusText);
-    throw new Error(String(detail));
-  }
+  const res = await post('/ablate', req);
   return res.json();
 }
 
@@ -377,14 +348,6 @@ export async function fetchColumn(req: {
    * required for sampled traces. When set the server ignores prompt/rollout. */
   ids?: number[];
 }): Promise<ColumnResponse> {
-  const res = await fetch(`${ENGINE_URL}/column`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ top_k: 5, jlens: true, rollout: 0, ...req })
-  });
-  if (!res.ok) {
-    const detail = await res.json().then((j) => j.detail ?? res.statusText).catch(() => res.statusText);
-    throw new Error(String(detail));
-  }
+  const res = await post('/column', { top_k: 5, jlens: true, rollout: 0, ...req });
   return res.json();
 }

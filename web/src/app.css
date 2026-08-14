@@ -115,6 +115,58 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 .status { font-size: 10.5px; color: var(--good); white-space: nowrap; }
 .status.off { color: var(--bad); }
 
+/* Lens empty state — the centered placeholder a lens shows before it has
+   anything to render (type a string / press run / engine offline). */
+.panel.empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* Structure-view vocabulary — the chip/table language shared by the symbolic
+   lens views (StreamView, WordListView, CorpusView, ReanalysisView,
+   CandidatesTable; each view's root carries .structure-view). Scoped under
+   that root class because some of the bare names mean something else
+   elsewhere: TokenBitsStrip's .chip is a tiny legend swatch, GraphView's
+   .hot is an SVG stroke highlight. */
+.structure-view .chip {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 6px;
+  border: 1px solid;
+  border-radius: 4px;
+  white-space: pre;
+  user-select: none;
+}
+.structure-view .rulechip { font-weight: 700; }        /* a symbol that expands (rule/morph), not a raw character */
+.structure-view .stream-chip { transition: outline 0.1s, transform 0.1s; }
+.structure-view .hot {                                  /* part of the next chosen move */
+  outline: 2px solid var(--chosen);
+  outline-offset: 1px;
+  z-index: 1;
+}
+
+/* table rows: the row the MDL search picked, and its PICK badge */
+.structure-view .row.chosen { background: rgba(255, 209, 102, 0.1); outline: 1px solid rgba(255, 209, 102, 0.3); }
+.structure-view .tag { font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px; letter-spacing: 0.04em; }
+.structure-view .tag.pick { background: var(--chosen); color: #1a1400; margin-right: 4px; }
+
+/* the model | data split panes (dictionary/lexicon vs. stream/corpus) */
+.structure-view .block { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.structure-view .block-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; flex: 0 0 auto; }
+.structure-view .words {
+  display: flex; flex-direction: column; gap: 4px;
+  overflow-y: auto; min-height: 0; flex: 1 1 auto;
+  align-content: flex-start;
+  padding: 8px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+}
+.structure-view .freq { font-size: 11px; min-width: 28px; text-align: right; flex: 0 0 auto; padding-top: 4px; }
+.structure-view .morphs { display: flex; flex-wrap: wrap; gap: 3px; min-width: 0; }
+
 .scrollbar::-webkit-scrollbar { height: 8px; width: 8px; }
 .scrollbar::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
 .scrollbar::-webkit-scrollbar-track { background: transparent; }

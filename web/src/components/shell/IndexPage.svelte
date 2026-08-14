@@ -7,10 +7,7 @@
    */
   import { KINDS, KIND_ORDER, LENSES, type LensKind } from '../../lib/lenses';
   import { engine } from '../../lib/logit/engine.svelte';
-
-  $effect(() => {
-    void engine.check();
-  });
+  import EngineStatus from './EngineStatus.svelte';
 
   const byKind = (k: LensKind) => LENSES.filter((l) => l.kind === k);
 </script>
@@ -33,9 +30,7 @@
         <h2 class="mono">{KINDS[k].label}</h2>
         <span class="tagline faint">{KINDS[k].tagline}</span>
         {#if k === 'instrument'}
-          <span class="estatus mono" class:off={engine.probed && !engine.up}>
-            {!engine.probed ? 'engine — checking…' : engine.up ? `engine · ${engine.device}` : 'engine offline — make up'}
-          </span>
+          <EngineStatus detailed />
         {/if}
       </div>
       <div class="cards">
@@ -77,8 +72,6 @@
     color: var(--text);
   }
   .tagline { font-size: 11.5px; }
-  .estatus { font-size: 10.5px; color: var(--good); margin-left: auto; white-space: nowrap; }
-  .estatus.off { color: var(--bad); }
 
   .cards {
     display: grid;

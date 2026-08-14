@@ -14,7 +14,9 @@
   import InterpretGuide from '../InterpretGuide.svelte';
   import PanelHost from '../PanelHost.svelte';
   import TopBar from '../shell/TopBar.svelte';
+  import TransportBar from '../shell/TransportBar.svelte';
   import EngineOffline from '../shell/EngineOffline.svelte';
+  import EngineStatus from '../shell/EngineStatus.svelte';
   import TrainChart from './TrainChart.svelte';
 
   const panels = new PanelManager(
@@ -46,10 +48,6 @@
   let ckpts = $state<{ name: string; note: string }[]>([]);
   let done = $state<{ acc: number; epochs_run: number } | null>(null);
   let abort: AbortController | null = null;
-
-  $effect(() => {
-    void engine.check();
-  });
 
   async function run() {
     if (streaming) return;
@@ -131,15 +129,9 @@
     <button class="primary" onclick={run} disabled={!engine.up}>train ▸</button>
   {/if}
 
-  {#if note}
-    <span class="hint mono">{note}</span>
-  {/if}
-
   <span class="spacer"></span>
 
-  <span class="status mono" class:off={!engine.up} title="engine service (engine/, port 5181)">
-    {engine.up ? `engine · ${engine.device}` : 'engine offline'}
-  </span>
+  <EngineStatus />
 </TopBar>
 
 {#if !engine.up && !start}
@@ -211,9 +203,7 @@
     actions={{ curve: aCurve, ckpts: aCkpts }}
   />
 
-  <div class="panel statusbar">
-    <span class="mono muted">{error ? `error · ${error}` : note || 'ready — press train'}</span>
-  </div>
+  <TransportBar note={error ? `error · ${error}` : note || 'ready — press train'} />
 {/if}
 
 <style>
@@ -232,12 +222,4 @@
 
   .about { display: flex; flex-direction: column; gap: 8px; overflow: auto; min-height: 0; }
   .about p { margin: 0; font-size: 12.5px; line-height: 1.5; }
-
-  .statusbar {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    padding: 7px 12px;
-    font-size: 11.5px;
-  }
 </style>
