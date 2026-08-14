@@ -48,6 +48,10 @@ export const DATASETS: Record<string, Dataset> = {
       '+': '#667788',
       '=': '#667788'
     },
+    // Every mix appears in both orders, so commutativity is in the data — and
+    // the answer after "=" depends on BOTH color tokens, never on any single
+    // position, which is what forces attention (not just position embeddings)
+    // to carry the information.
     trainData: [
       ['red', '+', 'blue', '=', 'purple'],
       ['blue', '+', 'red', '=', 'purple'],

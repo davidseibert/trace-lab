@@ -124,6 +124,9 @@ export function trainTrace(ds: Dataset, opts: TrainTraceOptions = {}): TrainRun 
     model.forward(probeInput);
     const viz = model.viz!;
 
+    // Greedy readout: viz.probs is already the softmaxed next-token
+    // distribution at the probe's last position ([vocabSize]), so a linear
+    // argmax scan gives the model's top-1 guess.
     let predId = 0;
     for (let v = 1; v < viz.probs.length; v++) if (viz.probs[v] > viz.probs[predId]) predId = v;
     const confidence = viz.probs[predId];
@@ -151,6 +154,8 @@ export function trainTrace(ds: Dataset, opts: TrainTraceOptions = {}): TrainRun 
     if (isLast) break;
 
     // One training update: sample an example, forward, backward, Adam step.
+    // Batch size 1 (pure SGD-style sampling) — the noisy per-sample gradient is
+    // fine because the reported curve is meanLoss(), not this sample's loss.
     const ex = train[randInt(rng, train.length)];
     optimizer.zeroGrad();
     const logits = model.forward(ex.input);

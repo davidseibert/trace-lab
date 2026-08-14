@@ -18,6 +18,10 @@ export type Rng = () => number;
  */
 export function mulberry32(seed: number): Rng {
   let a = seed >>> 0;
+  // Counter-based design: `a` walks a Weyl sequence (fixed odd increment
+  // 0x6d2b79f5 mod 2³², so it visits all 2³² states — period 2³²), and each
+  // output pushes that counter through an xorshift-multiply avalanche. State
+  // is a single 32-bit word; the final >>> 0 / 2³² maps it into [0, 1).
   return function () {
     a |= 0;
     a = (a + 0x6d2b79f5) | 0;
@@ -35,6 +39,8 @@ export function gaussian(rng: Rng, std = 1): number {
   let u1 = rng();
   const u2 = rng();
   while (u1 === 0) u1 = rng(); // log(0) guard
+  // z = √(−2 ln u₁)·cos(2π u₂) ~ N(0,1): radius from u₁, angle from u₂.
+  // Consumes two uniforms and discards the sin twin of the pair.
   return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2) * std;
 }
 

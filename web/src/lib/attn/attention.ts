@@ -109,12 +109,18 @@ export function computeAttention(
   const heads: HeadTrace[] = [];
   const outs: Tensor[] = [];
   for (let h = 0; h < nHeads; h++) {
+    // Head h owns columns [h·headDim, (h+1)·headDim) of each fused projection —
+    // "multi-head" is just running the same arithmetic on column blocks.
     const Q = sliceCols(Qfull, h * headDim, headDim);
     const K = sliceCols(Kfull, h * headDim, headDim);
     const V = sliceCols(Vfull, h * headDim, headDim);
+    // scores[r][c] = q_r·k_c. Dividing by √headDim keeps the dots' variance
+    // ≈1 (a dot of headDim roughly-unit-variance terms has variance ≈headDim),
+    // so softmax stays out of its saturated near-one-hot regime as heads grow.
     const scores = matmul(Q, transpose2d(K));
     const scaled = scale(scores, 1 / Math.sqrt(headDim));
     const weights = computeWeights(scaled, cfg.causal);
+    // Row r of output = Σ_c weights[r][c]·V[c] — a convex mix of value rows.
     const output = matmul(weights, V);
     heads.push({
       head: h,

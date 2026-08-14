@@ -91,7 +91,10 @@ export function uniformStream(text: string): CodeStream {
   return staticStream(text, dist, idOf);
 }
 
-/** Empirical (Shannon) model: p = count/total from the text itself. */
+/** Empirical (Shannon) model: p = count/total from the text itself. Expected
+ *  cost is Σ p·(−log2 p) = H(text) bits/char — the memoryless lower bound —
+ *  versus the uniform model's flat log2(V) ≥ H. The gap between the two streams
+ *  is exactly what knowing the letter frequencies buys. */
 export function empiricalStream(text: string): CodeStream {
   const { chars, idOf } = alphabetOf(text);
   const counts = new Array(chars.length).fill(0);

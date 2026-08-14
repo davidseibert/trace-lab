@@ -68,7 +68,12 @@ export function findPatterns(
   }
 
   // 1. Enumerate connected vertex subsets (size 2..maxNodes) by BFS growth,
-  //    deduped by their sorted membership.
+  //    deduped by their sorted membership. Complete: every connected subset of
+  //    size s is some size-(s-1) connected subset plus one boundary vertex, so
+  //    level-by-level growth from singletons reaches each subset (many ways —
+  //    hence the `seen` dedup, which also makes each expand exactly once).
+  //    Worst case this is exponential in maxNodes (dense graphs have ~N·d^(s-1)
+  //    subsets per level); SUBSET_CAP is the tractability guarantee.
   const seen = new Set<string>();
   const subsets: number[][] = [];
   let frontier: number[][] = [];
@@ -95,7 +100,11 @@ export function findPatterns(
     frontier = next;
   }
 
-  // 2. Canonicalize each subset's induced subgraph and group by key.
+  // 2. Canonicalize each subset's induced subgraph and group by key. Two
+  //    induced subgraphs are isomorphic (labels included) iff their canonical
+  //    keys are equal, so a Map replaces pairwise isomorphism tests: O(subsets)
+  //    canonicalizations instead of O(subsets²) matchings. This is where the
+  //    "subgraph matching" actually happens.
   const groups = new Map<
     string,
     { patNodes: number[]; patEdges: PatEdge[]; embeddings: Embedding[] }
@@ -118,6 +127,8 @@ export function findPatterns(
     const labels = ids.map((id) => m.nodes[id].label);
     const { key, order } = canonicalize(labels, localEdges);
 
+    // `order` maps canonical position → local index; `pos` is its inverse, so
+    // edges can be rewritten into pattern-position coordinates.
     const pos = new Array(ids.length);
     order.forEach((orig, p) => (pos[orig] = p));
 
@@ -136,6 +147,10 @@ export function findPatterns(
   }
 
   // 3. Per group: greedily select a maximal vertex-disjoint instance set.
+  //    MAXIMAL (nothing more fits), not maximum — the true optimum is max
+  //    independent set in the instance-overlap graph, NP-hard, and classic
+  //    SUBDUE greedes here too. `apply()` in graph.ts assumes disjointness:
+  //    each node belongs to at most one folded instance.
   const out: PatternGroup[] = [];
   for (const [key, g] of groups) {
     if (g.embeddings.length < 2) continue;

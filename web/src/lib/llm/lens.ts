@@ -57,7 +57,10 @@ export function logitLens(model: MiniGPT): LensReport {
   const off = (T - 1) * D;
   const lOff = (T - 1) * V;
 
-  // Shared readout: final LayerNorm + unembed on a single residual row.
+  // Shared readout: final LayerNorm + unembed on a single residual row —
+  // p = softmax( Wᵀ·(γ ⊙ x̂ + β) + b ) with x̂ = (h − μ)/√(σ² + ε).
+  // A scalar re-implementation of lnFinal + head so it can be applied to any
+  // D-vector (raw rung or J-transported), not just the model's own blockOut.
   const gam = model.lnFinal.gamma.data;
   const bet = model.lnFinal.beta.data;
   const W = model.head.weight.data; // [D, V]
@@ -80,7 +83,10 @@ export function logitLens(model: MiniGPT): LensReport {
   };
 
   // Transport Jacobians J[d][e] = ∂ blockOut[last,d] / ∂ rung[last,e]:
-  // D sweeps, each seeding one output dim of the final residual.
+  // D sweeps, each seeding one output dim of the final residual. Reverse mode
+  // yields one *row* of J per sweep — after seeding output d, every upstream
+  // grad holds ∂blockOut[d]/∂(that value), and slicing the last position's D
+  // entries reads the row off both rungs from the same sweep.
   const Jemb: Float64Array[] = [];
   const Jattn: Float64Array[] = [];
   for (let d = 0; d < D; d++) {
@@ -90,7 +96,9 @@ export function logitLens(model: MiniGPT): LensReport {
   }
 
   // Output-sensitivity Jacobians Jl[v][e] = ∂ logits[last,v] / ∂ rung[last,e]:
-  // V sweeps, each seeding one logit.
+  // V sweeps, each seeding one logit. These go all the way through lnFinal +
+  // unembed, so their row space is exactly the set of residual directions the
+  // output can perceive (used by visibleFraction, not by the decoders).
   const JlEmb: Float64Array[] = [];
   const JlAttn: Float64Array[] = [];
   const JlOut: Float64Array[] = [];
@@ -101,6 +109,9 @@ export function logitLens(model: MiniGPT): LensReport {
     JlOut.push(t.blockOut.grad.slice(off, off + D));
   }
 
+  // (J·h)[d] = Σ_e J[d][e]·h[e]: the rung pushed through the *linearisation* of
+  // the remaining layers at the actual forward point — first-order transport
+  // into the final basis, exact only if what remains were linear.
   const transported = (J: Float64Array[], h: Float64Array): Float64Array => {
     const out = new Float64Array(D);
     for (let d = 0; d < D; d++) {
@@ -158,7 +169,11 @@ function visibleFraction(Jl: Float64Array[], h: Float64Array): number {
   const mean = new Float64Array(D);
   for (let v = 0; v < V; v++) for (let d = 0; d < D; d++) mean[d] += Jl[v][d] / V;
 
-  // Gram–Schmidt over the centered rows → orthonormal basis of the visible space.
+  // Gram–Schmidt over the centered rows → orthonormal basis of the visible
+  // space: subtract each accepted basis vector's component, keep what survives.
+  // Rows nearly in the span of earlier ones shrink to ~0 and are dropped by the
+  // relative tolerance (1e-9 × largest entry), so the basis size = numerical
+  // rank of the centered Jacobian (≤ min(V−1, D)).
   const basis: Float64Array[] = [];
   let scale = 0;
   for (let v = 0; v < V; v++)
@@ -180,6 +195,8 @@ function visibleFraction(Jl: Float64Array[], h: Float64Array): number {
     }
   }
 
+  // With {b} orthonormal, ‖P h‖² = Σ_b ⟨h,b⟩² (Parseval); ratio to ‖h‖² is the
+  // energy fraction the output can see. min(1,·) absorbs float round-off.
   let h2 = 0;
   for (let d = 0; d < D; d++) h2 += h[d] * h[d];
   if (h2 === 0) return 0;
@@ -192,7 +209,11 @@ function visibleFraction(Jl: Float64Array[], h: Float64Array): number {
   return Math.min(1, p2 / h2);
 }
 
-/** Bits view of a probability: the code length of `id` under `probs`. */
+/**
+ * Bits view of a probability: the code length of `id` under `probs`.
+ * Shannon/arithmetic-coding cost −log₂ p; the 1e-12 floor caps a zero-prob
+ * token at ~40 bits instead of ∞.
+ */
 export function bitsOf(probs: Float64Array, id: number): number {
   return -Math.log2(probs[id] + 1e-12);
 }

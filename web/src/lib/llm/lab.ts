@@ -87,6 +87,9 @@ export function makeLab(run: TrainRun, refInputs: number[][]): Lab {
     const logits = model.viz!.logits;
     let bits = 0;
     for (const { pos, id } of c.targets) {
+      // Row `pos` of the [T, V] logits → softmax → price the actual next token
+      // at −log₂ p. The 1e-12 floor caps one transition at ≈40 bits instead of
+      // letting a zeroed-out probability blow the sum up to Infinity.
       const p = softmaxVec(logits.data.subarray(pos * V, (pos + 1) * V));
       bits += -Math.log2(p[id] + 1e-12);
     }

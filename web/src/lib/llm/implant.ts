@@ -81,7 +81,7 @@ export function implantModel(
   let count = 0;
   for (const inp of refInputs) {
     base.forward(inp);
-    const f = base.block.lastFfnIn!;
+    const f = base.block.lastFfnIn!; // ln2 output = the FFN's actual input, [T, D]
     const T = f.shape[0];
     for (let t = 0; t < T; t++) for (let d = 0; d < D; d++) mu[d] += f.data[t * D + d];
     count += T;
@@ -113,6 +113,9 @@ export function implantModel(
     copy(gp.bias.data, bp.bias.data);
   }
   // fc1: [D, H] → [D, H+n], column-wise; new columns start at 0.
+  // Row-major layout: widening each row from H to H+n entries shifts every
+  // element's flat index, so fc1 must be re-copied per element. fc2 grows by
+  // *appending rows*, which are contiguous in row-major — a flat set() works.
   const g1w = gb.ffn.fc1.weight.data;
   const b1w = bb.ffn.fc1.weight.data;
   g1w.fill(0);
@@ -130,8 +133,13 @@ export function implantModel(
     base.forward(fact.promptIds);
     const f = base.block.lastFfnIn!;
     const T = f.shape[0];
-    const x = f.data.slice((T - 1) * D, T * D);
+    const x = f.data.slice((T - 1) * D, T * D); // FFN input at the prompt's last position, [D]
 
+    // Key geometry. Stored key k̂ = k/‖k‖; align = k̂·x is the unit's pre-bias
+    // response at the fact's OWN prompt (= ‖x‖ raw; smaller once μ is removed,
+    // since only the discriminative residual of x survives). With the gate bias
+    // at −θ·align, the fact itself activates at act = align·(1−θ) > 0, while any
+    // input whose projection onto k̂ falls below θ·align is ReLU'd to silence.
     const k = new Float64Array(D);
     for (let d = 0; d < D; d++) k[d] = x[d] - (fact.whiten ? mu[d] : 0);
     let keyNorm = 0;
@@ -144,6 +152,10 @@ export function implantModel(
     const act = Math.max(a * (1 - fact.threshold), 1e-6);
 
     // Value: unembed column of the target, centered over the vocabulary.
+    // Subtracting each dimension's mean over all V unembed columns removes the
+    // raise-every-logit-equally component — invisible to softmax — leaving the
+    // pure target-vs-everyone direction. headW is [D, V], so column j of the
+    // unembed is the stride-V slice headW[d*V + j].
     const v = new Float64Array(D);
     let vNorm = 0;
     for (let d = 0; d < D; d++) {
@@ -155,6 +167,11 @@ export function implantModel(
     }
     vNorm = Math.max(Math.sqrt(vNorm), 1e-9);
 
+    // The graft itself — one rank-one memory: fc1 column ← k̂ (address),
+    // bias ← −θ·align (gate), fc2 row ← v̂/act (payload). At the fact's own
+    // prompt the unit therefore emits ReLU(k̂·x − θ·align)·v̂/act = v̂ exactly:
+    // a unit-norm push along the target direction, rescaled by the calibration
+    // below to hit the requested logit boost.
     const unit = H + i;
     for (let d = 0; d < D; d++) g1w[d * (H + n) + unit] = k[d] / kn;
     gb.ffn.fc1.bias.data[unit] = -fact.threshold * a;
@@ -172,7 +189,7 @@ export function implantModel(
       return lg.data[(fact.promptIds.length - 1) * V + fact.targetId];
     };
     const saved = fc2.slice(rowOff, rowOff + D);
-    fc2.fill(0, rowOff, rowOff + D);
+    fc2.fill(0, rowOff, rowOff + D); // silence the unit → baseline logit l0
     const l0 = targetLogit();
     fc2.set(saved, rowOff);
     for (let iter = 0; iter < 2; iter++) {

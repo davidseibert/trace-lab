@@ -77,6 +77,8 @@ class Linear implements Layer {
   weight: Tensor;
   bias: Tensor;
   constructor(inDim: number, outDim: number, rng: Rng) {
+    // Xavier/Glorot std √(2/(in+out)): keeps activation and gradient variance
+    // roughly constant through the layer at init.
     this.weight = Tensor.randn([inDim, outDim], Math.sqrt(2 / (inDim + outDim)), rng);
     this.bias = Tensor.zeros([outDim]);
   }
@@ -129,6 +131,8 @@ class MultiHeadAttention implements Layer {
     const H = this.nHeads;
     const HD = this.headDim;
 
+    // One shared projection each for Q/K/V ([T,D] -> [T,D]), then reshaped so
+    // every head owns a disjoint HD-dim slice and attends independently.
     const Q = this.qProj.forward(x);
     const K = this.kProj.forward(x);
     const V = this.vProj.forward(x);
@@ -137,17 +141,25 @@ class MultiHeadAttention implements Layer {
     const kr = this.#splitHeads(K, T, H, HD);
     const vr = this.#splitHeads(V, T, H, HD);
 
+    // scores[h,t,s] = q_t·k_s / √HD. If q,k have ~unit-variance entries the dot
+    // product has variance ~HD; the √HD divisor keeps scores O(1) so softmax
+    // stays in its sensitive range instead of saturating.
     const kt = this.#transpose(kr, H, T, HD); // [H, HD, T]
     const scores = scale(matmul(qr, kt), 1 / Math.sqrt(HD)); // [H, T, T]
+    // Causal mask + row softmax: row t is a distribution over positions ≤ t.
     const attn = maskedSoftmax(scores, T);
     this.lastAttn = attn.snapshot();
 
+    // Each output row is a convex combination of value vectors: Σ_s attn[t,s]·v_s.
     const attnOut = matmul(attn, vr); // [H, T, HD]
     const concat = this.#mergeHeads(attnOut, T, H, HD); // [T, D]
     return this.outProj.forward(concat);
   }
 
-  /** [T, H*HD] -> [H, T, HD] */
+  /**
+   * [T, H*HD] -> [H, T, HD]. Pure data movement (a permutation), so backward is
+   * the inverse permutation of the gradient — same for merge/transpose below.
+   */
   #splitHeads(x: Tensor, T: number, H: number, HD: number): Tensor {
     const out = new Tensor(new Float64Array(x.data.length), [H, T, HD]);
     for (let t = 0; t < T; t++)
@@ -165,7 +177,7 @@ class MultiHeadAttention implements Layer {
     return out;
   }
 
-  /** [H, T, HD] -> [T, H*HD] */
+  /** [H, T, HD] -> [T, H*HD]. Inverse of #splitHeads. */
   #mergeHeads(x: Tensor, T: number, H: number, HD: number): Tensor {
     const D = H * HD;
     const out = new Tensor(new Float64Array(T * D), [T, D]);
@@ -184,7 +196,7 @@ class MultiHeadAttention implements Layer {
     return out;
   }
 
-  /** [B, T, HD] -> [B, HD, T] */
+  /** [B, T, HD] -> [B, HD, T]. Per-batch transpose, so matmul(q, kᵀ) = QKᵀ. */
   #transpose(x: Tensor, B: number, T: number, HD: number): Tensor {
     const out = new Tensor(new Float64Array(x.data.length), [B, HD, T]);
     for (let b = 0; b < B; b++)
@@ -249,6 +261,11 @@ class TransformerBlock implements Layer {
     this.ln2 = new LayerNorm(dim);
   }
   forward(x: Tensor): Tensor {
+    // Pre-norm residuals: each sub-layer reads a normalised copy but writes
+    // back into the raw stream —
+    //   res1 = x + Attn(LN1(x));  out = res1 + FFN(LN2(res1)).
+    // The identity path is never normalised, so the residual stream is an
+    // additive ledger each sub-layer only appends to.
     const res1 = addElem(x, this.attn.forward(this.ln1.forward(x)));
     const ffnIn = this.ln2.forward(res1);
     this.lastRes1 = res1;
@@ -299,14 +316,18 @@ export class MiniGPT {
     const V = this.cfg.vocabSize;
     const posIds = Array.from({ length: T }, (_, i) => i);
 
+    // Residual stream starts as token identity + position, summed into one
+    // [T, embDim] vector per position (they share the space; attention learns
+    // to read whichever part it needs).
     const tokEmb = this.tokenEmb.forward(tokenIds);
     const posEmb = this.posEmb.forward(posIds);
     const embedded = addElem(tokEmb, posEmb);
 
     const blockOut = this.block.forward(embedded);
     const normed = this.lnFinal.forward(blockOut);
-    const logits = this.head.forward(normed);
+    const logits = this.head.forward(normed); // [T, V]: row t predicts token t+1
 
+    // Only the last row is the "next token" distribution for this prompt.
     const lastLogits = new Float64Array(V);
     for (let v = 0; v < V; v++) lastLogits[v] = logits.data[(T - 1) * V + v];
 
@@ -390,6 +411,9 @@ export class Adam {
 
   step(): void {
     this.t++;
+    // Bias correction: m and v start at 0, so after t steps an EMA has only
+    // (1 − βᵗ) of its mass; dividing by that makes m̂, v̂ unbiased estimates of
+    // E[g] and E[g²]. Matters most in the first ~1/(1−β) steps.
     const bc1 = 1 - Math.pow(this.beta1, this.t);
     const bc2 = 1 - Math.pow(this.beta2, this.t);
     for (let pi = 0; pi < this.params.length; pi++) {
@@ -397,10 +421,14 @@ export class Adam {
       const m = this.#m[pi];
       const v = this.#v[pi];
       for (let i = 0; i < p.data.length; i++) {
+        // First/second moment EMAs: m ≈ E[g] (momentum), v ≈ E[g²].
         m[i] = this.beta1 * m[i] + (1 - this.beta1) * p.grad[i];
         v[i] = this.beta2 * v[i] + (1 - this.beta2) * p.grad[i] * p.grad[i];
         const mHat = m[i] / bc1;
         const vHat = v[i] / bc2;
+        // Update ≈ lr · E[g]/√E[g²]: each coordinate moves ~lr per step
+        // regardless of its gradient's raw scale (√v̂ normalises it); eps
+        // guards the divide for coordinates with vanishing gradients.
         p.data[i] -= (this.lr * mHat) / (Math.sqrt(vHat) + this.eps);
       }
     }

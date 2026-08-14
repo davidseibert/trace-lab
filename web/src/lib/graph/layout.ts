@@ -53,6 +53,13 @@ export function forceLayout(
   const rng: Rng = mulberry32(seed);
   const pos: Pt[] = Array.from({ length: n }, () => ({ x: rng(), y: rng() }));
 
+  // Fruchterman–Reingold force model: repulsion f_r(d) = REP·k²/d between EVERY
+  // pair (O(n²) per iteration — fine at toy sizes), attraction f_a(d) = d²/k
+  // along edges. Setting f_r = f_a gives equilibrium spacing d = k·REP^⅓, so
+  // k = √(area/n) tiles n nodes evenly over the unit square and REP > 1 pads
+  // that spacing so disconnected motifs drift apart. Each node moves along its
+  // net force, but at most `temp` per step; the linear cool → 0 is simulated
+  // annealing minus the randomness (big early rearrangements, then settling).
   const k = Math.sqrt(1 / n); // ideal edge length
   const REP = 1.7; // repulsion dominates so clusters fly apart
   let temp = 0.18; // max displacement per step, cooled toward 0
