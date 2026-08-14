@@ -25,7 +25,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from lens import column_report, lens_report, load_model, pick_device, reason_events, render_chat
+from lens import (ablate_report, attn_report, column_report, lens_report, load_model,
+                  pick_device, reason_events, render_chat)
 
 # The Qwen3-0.6B pair mirrors Raschka's *Build a Reasoning Model from Scratch*
 # checkpoints: his base/reasoning .pth files are repackagings of these exact
@@ -230,6 +231,62 @@ def chat(req: ChatRequest):
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache"})
+
+
+class AttnRequest(BaseModel):
+    model: str = "Qwen/Qwen3-0.6B"
+    # The exact sequence (prompt ids + streamed ids) — same contract as /column.
+    ids: list[int] = Field(min_length=2, max_length=4096)
+    # Destination position: whose attention rows to read. Only ids[:pos+1] is
+    # forwarded; eager attention materializes [heads, seq, seq] per layer, so
+    # pos is capped to keep peak VRAM sane on a 12 GB card.
+    pos: int = Field(ge=1, le=1500)
+    top_sources: int = Field(default=8, ge=1, le=32)
+    # Optionally include one head's full raw + value-weighted rows.
+    layer: int | None = Field(default=None, ge=0)
+    head: int | None = Field(default=None, ge=0)
+
+
+@app.post("/attn")
+def attn(req: AttnRequest):
+    """Every head's attention row at one destination token, plus per-head
+    stats (entropy, sink mass, top sources) and raw/value-weighted aggregates."""
+    model, _tok, _device = _get(req.model)
+    try:
+        return {"model": req.model,
+                **attn_report(model, req.ids, req.pos, top_sources=req.top_sources,
+                              pick_layer=req.layer, pick_head=req.head)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+
+
+class AblateRequest(BaseModel):
+    model: str = "Qwen/Qwen3-0.6B"
+    ids: list[int] = Field(min_length=2, max_length=4096)
+    # The token to re-price (ids[pos]), and the source span [mask_start,
+    # mask_end) that everything from mask_end onward is forbidden to read.
+    pos: int = Field(ge=1)
+    mask_start: int = Field(ge=0)
+    mask_end: int = Field(ge=1)
+    top_k: int = Field(default=5, ge=1, le=20)
+
+
+@app.post("/ablate")
+def ablate(req: AblateRequest):
+    """Attention-as-bits: re-price a token with a source region masked out of
+    the entire downstream computation. delta_bits is what reading that region
+    actually bought."""
+    model, tok, _device = _get(req.model)
+    try:
+        return {"model": req.model,
+                **ablate_report(model, tok, req.ids, req.pos, req.mask_start,
+                                req.mask_end, top_k=req.top_k)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
 
 
 @app.post("/column")

@@ -11,6 +11,7 @@
   } from '../lib/logit/api';
 
   import Controls from './Controls.svelte';
+  import InterpretGuide from './InterpretGuide.svelte';
   import Panel from './Panel.svelte';
   import PanelHost from './PanelHost.svelte';
   import LayerGrid from './logit/LayerGrid.svelte';
@@ -21,7 +22,8 @@
   const panels = new PanelManager('logit', [
     { id: 'grid', title: 'Lens grid' },
     { id: 'depth', title: 'Code length by depth' },
-    { id: 'readout', title: 'Rung readout' }
+    { id: 'readout', title: 'Rung readout' },
+    { id: 'guide', title: 'How to read this', collapsed: true }
   ]);
 
   // The real-model counterpart of the mini-GPT lens: same Player, but the axis
@@ -273,6 +275,10 @@ uv run uvicorn main:app --port 5181</pre>
             </div>
           {/if}
         </div>
+      </Panel>
+
+      <Panel manager={panels} id="guide" weight={1}>
+        <InterpretGuide sections={['ladder', 'jlens', 'repro', 'small']} />
       </Panel>
     </div>
   </PanelHost>

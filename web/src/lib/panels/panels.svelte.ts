@@ -13,6 +13,8 @@ export interface PanelDef {
   id: string;
   /** Shown in the title bar and in the (future) docked-tab strip. */
   title: string;
+  /** Start collapsed (e.g. reference panels). Reset returns here, not to open. */
+  collapsed?: boolean;
 }
 
 export interface PanelState {
@@ -37,6 +39,7 @@ export class PanelManager {
   focusedId = $state<string | null>(null);
 
   #storageKey: string;
+  #defaults: Record<string, boolean> = {};
 
   constructor(key: string, defs: PanelDef[]) {
     this.#storageKey = `trace-lab:panels:${key}`;
@@ -44,10 +47,11 @@ export class PanelManager {
 
     this.order = defs.map((d) => d.id);
     for (const d of defs) {
+      this.#defaults[d.id] = d.collapsed ?? false;
       this.states[d.id] = {
         id: d.id,
         title: d.title,
-        collapsed: saved?.collapsed?.[d.id] ?? false
+        collapsed: saved?.collapsed?.[d.id] ?? d.collapsed ?? false
       };
     }
     if (saved?.focusedId && this.states[saved.focusedId]) {
@@ -94,11 +98,11 @@ export class PanelManager {
     this.focusedId === id ? this.unfocus() : this.focus(id);
   }
 
-  /** Back to the default layout: everything expanded, nothing maximized. */
+  /** Back to the default layout (per-panel defaults), nothing maximized. */
   reset(): void {
     for (const id of this.order) {
       const s = this.states[id];
-      if (s) s.collapsed = false;
+      if (s) s.collapsed = this.#defaults[id] ?? false;
     }
     this.focusedId = null;
     this.#save();
@@ -106,7 +110,10 @@ export class PanelManager {
 
   /** True when the layout differs from the default (so a Reset button can show). */
   get isDirty(): boolean {
-    return this.focusedId !== null || this.panels.some((p) => p.collapsed);
+    return (
+      this.focusedId !== null ||
+      this.panels.some((p) => p.collapsed !== (this.#defaults[p.id] ?? false))
+    );
   }
 
   #save(): void {

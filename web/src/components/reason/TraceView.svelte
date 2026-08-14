@@ -14,12 +14,20 @@
     steps,
     selected,
     reveal,
-    onPick
+    onPick,
+    overlay = null,
+    prefix = null
   }: {
     steps: ReasonTok[];
     selected: number;
     reveal: number;
     onPick: (i: number) => void;
+    /** 0..1 per step: attention received from the selected token's computation.
+     * When set, tokens tint by this (purple) instead of surprisal (yellow). */
+    overlay?: number[] | null;
+    /** The templated prompt, shown dim before the trace; `a` tints by the same
+     * attention scale as `overlay` (0 = no tint). */
+    prefix?: { t: string; a: number }[] | null;
   } = $props();
 
   const surp = (s: ReasonTok) => -Math.log2(Math.max(s.p, 1e-30));
@@ -54,6 +62,12 @@
 </script>
 
 <div class="trace mono scrollbar">
+  {#if prefix}{#each prefix as pt, i (i)}{@const q = split(pt.t)}{q.lead}<span
+        class="ptok"
+        class:patt={pt.a > 0}
+        style="--att: {pt.a.toFixed(3)}"
+        title={`prompt #${i} “${pt.t}”`}>{q.vis}</span
+      >{q.trail}{/each}{/if}
   {#each steps as s, i (s.pos)}{@const p = split(s.t)}{p.lead}<button
       class="tok"
       class:think={inThink[i]}
@@ -61,7 +75,10 @@
       class:break={p.isBreak}
       class:sel={i === selected}
       class:unrevealed={i > reveal}
-      style="--heat: {heat(s).toFixed(3)}"
+      class:att={overlay !== null}
+      style={overlay !== null
+        ? `--att: ${(overlay[i] ?? 0).toFixed(3)}`
+        : `--heat: ${heat(s).toFixed(3)}`}
       title={`#${s.pos} “${s.t}” — ${surp(s).toFixed(2)}b (p=${(s.p * 100).toFixed(1)}%)`}
       onclick={() => onPick(i)}>{p.vis}</button
     >{p.trail}{/each}
@@ -87,6 +104,19 @@
   }
   .tok:hover {
     outline: 1px solid var(--muted);
+  }
+  .tok.att {
+    /* Attention overlay: where the selected token's computation looked. */
+    background: color-mix(in srgb, var(--model) calc(var(--att) * 70%), transparent);
+  }
+  .ptok {
+    color: var(--faint);
+    white-space: pre-wrap;
+    border-radius: 3px;
+  }
+  .ptok.patt {
+    background: color-mix(in srgb, var(--model) calc(var(--att) * 70%), transparent);
+    color: var(--muted);
   }
   .tok.think {
     color: var(--muted);

@@ -316,6 +316,78 @@ server.registerTool(
 );
 
 server.registerTool(
+  "inspect_attention",
+  {
+    title: "Attention rows at one token",
+    description:
+      "Where the computation that produced a token looked: every head's attention row at destination " +
+      "pos over the exact token sequence `ids` (use the /chat prompt ids + streamed ids; destination " +
+      "for the token emitted at position P is P-1). Returns raw and value-weighted aggregates over all " +
+      "heads (top sources only, to stay compact) plus the most focused heads. Pass layer+head for one " +
+      "head's full row.",
+    inputSchema: {
+      model: z.string().default("Qwen/Qwen3-0.6B"),
+      ids: z.array(z.number().int()).min(2).max(4096),
+      pos: z.number().int().min(1).max(1500),
+      layer: z.number().int().min(0).optional(),
+      head: z.number().int().min(0).optional(),
+      top: z.number().int().min(3).max(40).default(12).describe("How many aggregate sources / focused heads to return"),
+    },
+  },
+  async ({ model, ids, pos, layer, head, top }) => {
+    try {
+      const a = await postJson<{
+        seq: number; n_layers: number; n_heads: number;
+        agg: number[]; vagg: number[];
+        heads: { layer: number; head: number; entropy: number; sink: number; top: { pos: number; w: number; vw: number }[] }[];
+        picked: { row: number[]; vrow: number[] } | null;
+      }>(`${ENGINE_URL}/attn`, { model, ids, pos, layer, head }, ENGINE_HINT);
+      const rank = (v: number[]) =>
+        v.map((w, i) => ({ pos: i, w: round(w, 5) })).sort((x, y) => y.w - x.w).slice(0, top);
+      return ok({
+        pos, seq: a.seq, n_layers: a.n_layers, n_heads: a.n_heads,
+        top_sources_raw: rank(a.agg),
+        top_sources_value_weighted: rank(a.vagg),
+        most_focused_heads: [...a.heads]
+          .sort((x, y) => x.entropy - y.entropy)
+          .slice(0, top)
+          .map((h) => ({ ...h, top: h.top.slice(0, 5) })),
+        picked: a.picked ? { vrow_top: rank(a.picked.vrow) } : null,
+      });
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "ablate_region",
+  {
+    title: "Re-price a token without a region",
+    description:
+      "Attention-as-bits, causally: forbid the whole computation after mask_end from attending to " +
+      "sources [mask_start, mask_end), then re-price ids[pos]. delta_bits is what reading that region " +
+      "actually bought (e.g. mask the <think> span and re-price the answer token). Same ids contract " +
+      "as query_column/inspect_attention.",
+    inputSchema: {
+      model: z.string().default("Qwen/Qwen3-0.6B"),
+      ids: z.array(z.number().int()).min(2).max(4096),
+      pos: z.number().int().min(1),
+      mask_start: z.number().int().min(0),
+      mask_end: z.number().int().min(1),
+      top_k: z.number().int().min(1).max(20).default(5),
+    },
+  },
+  async ({ model, ids, pos, mask_start, mask_end, top_k }) => {
+    try {
+      return ok(await postJson(`${ENGINE_URL}/ablate`, { model, ids, pos, mask_start, mask_end, top_k }, ENGINE_HINT));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
   "engine_health",
   {
     title: "Engine health",

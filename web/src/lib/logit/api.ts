@@ -175,6 +175,86 @@ export async function streamChat(
   }
 }
 
+/** One head's stats at a destination position (from /attn). */
+export interface AttnHead {
+  layer: number;
+  head: number;
+  /** Entropy of the head's attention row, in bits — low = focused. */
+  entropy: number;
+  /** Mass on position 0 (the attention-sink no-op). */
+  sink: number;
+  top: { pos: number; w: number; vw: number }[];
+}
+
+export interface AttnResponse {
+  model: string;
+  pos: number;
+  seq: number;
+  n_layers: number;
+  n_heads: number;
+  /** Mean raw attention received per source, over all layers×heads. */
+  agg: number[];
+  /** Value-weighted aggregate (a·‖v‖ renormalized) — discounts sink stares. */
+  vagg: number[];
+  heads: AttnHead[];
+  /** The requested layer/head's full rows, if asked for. */
+  picked: { row: number[]; vrow: number[] } | null;
+}
+
+/** Where the computation that produced a token looked (destination = pos). */
+export async function fetchAttn(req: {
+  model: string;
+  ids: number[];
+  pos: number;
+  top_sources?: number;
+  layer?: number;
+  head?: number;
+}): Promise<AttnResponse> {
+  const res = await fetch(`${ENGINE_URL}/attn`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req)
+  });
+  if (!res.ok) {
+    const detail = await res.json().then((j) => j.detail ?? res.statusText).catch(() => res.statusText);
+    throw new Error(String(detail));
+  }
+  return res.json();
+}
+
+export interface AblateResponse {
+  model: string;
+  pos: number;
+  token: string;
+  mask: [number, number];
+  baseline: { p: number; bits: number; top: TopTok[] };
+  masked: { p: number; bits: number; top: TopTok[] };
+  /** What reading the masked region actually bought, in bits. */
+  delta_bits: number;
+}
+
+/** Re-price ids[pos] with attention to [mask_start, mask_end) blocked for the
+ * whole downstream computation — attention-as-bits. */
+export async function fetchAblate(req: {
+  model: string;
+  ids: number[];
+  pos: number;
+  mask_start: number;
+  mask_end: number;
+  top_k?: number;
+}): Promise<AblateResponse> {
+  const res = await fetch(`${ENGINE_URL}/ablate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req)
+  });
+  if (!res.ok) {
+    const detail = await res.json().then((j) => j.detail ?? res.statusText).catch(() => res.statusText);
+    throw new Error(String(detail));
+  }
+  return res.json();
+}
+
 export async function fetchColumn(req: {
   model: string;
   prompt: string;

@@ -316,6 +316,137 @@ def lens_report(
                       uniform=math.log2(out.logits.shape[-1]), n_prompt=n_prompt)
 
 
+def _kv_heads(model) -> int:
+    return getattr(model.config, "num_key_value_heads", None) or model.config.num_attention_heads
+
+
+@torch.no_grad()
+def attn_report(model, ids: list[int], pos: int, top_sources: int = 8,
+                pick_layer: int | None = None, pick_head: int | None = None) -> dict:
+    """Every head's attention row at destination ``pos``: where that token
+    looked while being computed.
+
+    Requires the eager attention path (which load_model already forces for the
+    J-lens). Forwards only ``ids[:pos+1]`` — the rows at ``pos`` don't depend
+    on anything after it. Returns per-head stats plus two aggregates over all
+    layers×heads:
+
+      - ``agg``  — mean raw attention received per source position
+      - ``vagg`` — the same, value-weighted (a·‖v‖, renormalized): a head can
+        stare at a token whose value vector is ~zero (attention sinks); this
+        discounts those no-op looks.
+
+    ``pick_layer``/``pick_head`` additionally return that one head's full raw
+    and value-weighted rows for UI overlays. Memory note: eager attention
+    materializes [heads, seq, seq] per layer, so seq is capped upstream.
+    """
+    input_ids = torch.tensor([ids], dtype=torch.long)
+    _preflight(model, input_ids, 0)
+    if not 0 < pos < input_ids.shape[1]:
+        raise ValueError(f"pos {pos} out of range (need 0 < pos < {input_ids.shape[1]}).")
+    device = next(model.parameters()).device
+    input_ids = input_ids[:, : pos + 1].to(device)
+    seq = pos + 1
+
+    # ‖v‖ per source, per KV head, per layer — captured off each v_proj.
+    vnorms: list[torch.Tensor] = []
+    n_kv = _kv_heads(model)
+
+    def grab_v(module, args, output):
+        v = output[0].view(seq, n_kv, -1)  # [seq, kv_heads, head_dim]
+        vnorms.append(v.float().norm(dim=-1).T.cpu())  # [kv_heads, seq]
+
+    hooks = [blk.self_attn.v_proj.register_forward_hook(grab_v) for blk in _blocks(model)]
+    try:
+        out = model(input_ids=input_ids, output_attentions=True)
+    finally:
+        for h in hooks:
+            h.remove()
+
+    n_heads = out.attentions[0].shape[1]
+    group = n_heads // n_kv
+    agg = torch.zeros(seq)
+    vagg = torch.zeros(seq)
+    heads = []
+    picked = None
+    for L, att in enumerate(out.attentions):
+        rows = att[0, :, pos, :].float().cpu()  # [heads, seq]
+        for h in range(n_heads):
+            a = rows[h]
+            w = a * vnorms[L][h // group]
+            w = w / w.sum().clamp_min(1e-9)
+            agg += a
+            vagg += w
+            ent = float(-(a.clamp_min(1e-12) * a.clamp_min(1e-12).log2()).sum())
+            tk = a.topk(min(top_sources, seq))
+            heads.append({
+                "layer": L, "head": h,
+                "entropy": round(ent, 3),
+                "sink": round(float(a[0]), 4),
+                "top": [{"pos": int(p), "w": round(float(x), 4), "vw": round(float(w[p]), 4)}
+                        for x, p in zip(tk.values, tk.indices)],
+            })
+            if L == pick_layer and h == pick_head:
+                picked = {"row": [round(float(x), 5) for x in a],
+                          "vrow": [round(float(x), 5) for x in w]}
+    n_total = len(out.attentions) * n_heads
+    return {
+        "pos": pos, "seq": seq,
+        "n_layers": len(out.attentions), "n_heads": n_heads,
+        "agg": [round(float(x), 5) for x in agg / n_total],
+        "vagg": [round(float(x), 5) for x in vagg / n_total],
+        "heads": heads,
+        "picked": picked,
+    }
+
+
+@torch.no_grad()
+def ablate_report(model, tok, ids: list[int], pos: int, mask_start: int, mask_end: int,
+                  top_k: int = 5) -> dict:
+    """Re-price token ``ids[pos]`` with attention to sources
+    [mask_start, mask_end) blocked for every position from mask_end on — the
+    causal counterfactual "what would this token cost if the whole computation
+    after the region couldn't read it". Attention-as-bits: the delta is what
+    attending to that region actually bought.
+    """
+    input_ids = torch.tensor([ids], dtype=torch.long)
+    _preflight(model, input_ids, 0)
+    n = input_ids.shape[1]
+    if not 0 < pos < n:
+        raise ValueError(f"pos {pos} out of range (need 0 < pos < {n}).")
+    if not 0 <= mask_start < mask_end <= pos:
+        raise ValueError(f"need 0 <= mask_start < mask_end <= pos, got [{mask_start}, {mask_end}) vs pos {pos}.")
+    device = next(model.parameters()).device
+    prefix = input_ids[:, :pos].to(device)  # logits at pos-1 price ids[pos]
+    target = int(ids[pos])
+
+    def price(attention_mask=None):
+        out = model(input_ids=prefix, attention_mask=attention_mask)
+        probs = out.logits[0, -1].float().softmax(-1)
+        return probs
+
+    base = price()
+    dtype = next(model.parameters()).dtype
+    neg = torch.finfo(dtype).min
+    m = torch.zeros(pos, pos, dtype=dtype)
+    m.masked_fill_(torch.ones(pos, pos, dtype=torch.bool).triu(1), neg)  # causal
+    m[mask_end:, mask_start:mask_end] = neg  # rows after the region can't read it
+    masked = price(m[None, None].to(device))
+
+    def entry(probs):
+        p = float(probs[target])
+        return {"p": p, "bits": -math.log(max(p, 1e-30)) / LN2}
+
+    b, mk = entry(base), entry(masked)
+    return {
+        "pos": pos, "token": _clean(tok.decode([target])),
+        "mask": [mask_start, mask_end],
+        "baseline": {**b, "top": _topk(base, tok, top_k)},
+        "masked": {**mk, "top": _topk(masked, tok, top_k)},
+        "delta_bits": mk["bits"] - b["bits"],
+    }
+
+
 @torch.no_grad()
 def reason_events(model, tok, text: str, max_new: int = 512,
                   temperature: float = 0.0, seed: int | None = None):

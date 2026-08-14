@@ -3,15 +3,20 @@
   import { Player } from '../lib/player.svelte';
   import { PanelManager } from '../lib/panels/panels.svelte';
   import {
+    fetchAblate,
+    fetchAttn,
     fetchColumn,
     fetchHealth,
     streamChat,
+    type AblateResponse,
+    type AttnResponse,
     type ColumnResponse,
     type ReasonMeta,
     type ReasonTok
   } from '../lib/logit/api';
 
   import Controls from './Controls.svelte';
+  import InterpretGuide from './InterpretGuide.svelte';
   import Panel from './Panel.svelte';
   import PanelHost from './PanelHost.svelte';
   import DepthChart from './logit/DepthChart.svelte';
@@ -24,7 +29,9 @@
     { id: 'trace', title: 'Reasoning trace' },
     { id: 'tokbits', title: 'Code length per token' },
     { id: 'depth', title: 'Code length by depth' },
-    { id: 'readout', title: 'Column readout' }
+    { id: 'readout', title: 'Column readout' },
+    { id: 'attn', title: 'Attention' },
+    { id: 'guide', title: 'How to read this', collapsed: true }
   ]);
 
   // The player scrubs TOKENS here (the mini-GPT lens scrubs training steps,
@@ -148,6 +155,118 @@
   }
 
   const jMatches = $derived(jcol !== null && sel !== null && jcol.pos === sel.pos - 1);
+
+  // ---- Attention: where the selected token's computation looked ----
+  // Destination is sel.pos - 1: the column whose forward produced this token
+  // (same convention as the J-lens drill-in).
+  let shade = $state<'surprisal' | 'attention'>('surprisal');
+  let attn = $state<AttnResponse | null>(null);
+  let attnLoading = $state(false);
+  let headSel = $state<{ layer: number; head: number } | null>(null);
+  let headRow = $state<number[] | null>(null);
+  let attnSeq = 0;
+  const fullIds = () => [...meta!.ids, ...player.steps.map((t) => t.id)];
+
+  $effect(() => {
+    const s = sel;
+    const on = shade === 'attention';
+    headSel = null;
+    headRow = null;
+    attn = null;
+    if (!on || !s || !meta || streaming || s.pos < 2 || s.pos - 1 > 1500) return;
+    const seq = ++attnSeq;
+    attnLoading = true;
+    const t = setTimeout(async () => {
+      try {
+        const a = await fetchAttn({ model: modelName, ids: fullIds(), pos: s.pos - 1 });
+        if (seq === attnSeq) attn = a;
+      } catch (e) {
+        error = e instanceof Error ? e.message : String(e);
+      } finally {
+        if (seq === attnSeq) attnLoading = false;
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  });
+
+  async function pickHead(layer: number, head: number) {
+    if (!sel || !meta) return;
+    if (headSel && headSel.layer === layer && headSel.head === head) {
+      headSel = null;
+      headRow = null;
+      return;
+    }
+    headSel = { layer, head };
+    try {
+      const a = await fetchAttn({ model: modelName, ids: fullIds(), pos: sel.pos - 1, layer, head });
+      if (headSel && headSel.layer === layer && headSel.head === head) headRow = a.picked?.vrow ?? null;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  // Overlay for TraceView: attention received per position, one shared scale
+  // for prompt and trace. Normalized over everything EXCEPT position 0 — the
+  // sink would wash out every real signal (it gets its own stat line).
+  const attnSrc = $derived(
+    shade === 'attention' && attn !== null && sel !== null && attn.pos === sel.pos - 1
+      ? (headRow ?? attn.vagg)
+      : null
+  );
+  const attnMax = $derived(attnSrc ? Math.max(1e-9, ...attnSrc.slice(1)) : 1);
+  const overlay = $derived.by(() => {
+    if (!attnSrc) return null;
+    return player.steps.map((t) => Math.min(1, (attnSrc[t.pos] ?? 0) / attnMax));
+  });
+  // The templated prompt as a dim prefix — so attention into the question
+  // (and the <|im_start|> sink) is visible instead of a disembodied stat.
+  const prefix = $derived.by(() => {
+    if (!meta) return null;
+    return meta.tokens.map((t, i) => ({
+      t,
+      a: attnSrc ? Math.min(1, (attnSrc[i] ?? 0) / attnMax) : 0
+    }));
+  });
+  const promptShare = $derived(
+    attn && meta ? attn.vagg.slice(0, meta.n_prompt).reduce((a, b) => a + b, 0) : 0
+  );
+
+  // Head grid intensity: focus (inverse entropy), so the pointy heads pop.
+  const headFocus = (h: { entropy: number }) =>
+    attn ? Math.max(0, 1 - h.entropy / Math.log2(Math.max(2, attn.seq))) : 0;
+
+  // ---- Δbits: re-price the selected token without the think region ----
+  let ablate = $state<AblateResponse | null>(null);
+  let ablating = $state(false);
+  const thinkSpan = $derived.by(() => {
+    const a = player.steps.findIndex((t) => t.t === '<think>');
+    const b = player.steps.findIndex((t) => t.t === '</think>');
+    if (a < 0 || b < 0) return null;
+    return { start: player.steps[a]!.pos, end: player.steps[b]!.pos };
+  });
+  $effect(() => {
+    void player.index;
+    ablate = null;
+  });
+  async function runAblate() {
+    const s = sel;
+    if (!s || !meta || !thinkSpan || ablating || s.pos <= thinkSpan.end) return;
+    ablating = true;
+    try {
+      const r = await fetchAblate({
+        model: modelName,
+        ids: fullIds(),
+        pos: s.pos,
+        mask_start: thinkSpan.start,
+        mask_end: thinkSpan.end + 1
+      });
+      if (sel === s) ablate = r;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      ablating = false;
+    }
+  }
   const surp = (s: ReasonTok) => -Math.log2(Math.max(s.p, 1e-30));
   const note = $derived(
     !meta || !sel
@@ -239,6 +358,8 @@
           steps={player.steps}
           selected={player.index}
           reveal={player.index}
+          {overlay}
+          {prefix}
           onPick={(i) => player.seek(i)}
         />
       </Panel>
@@ -303,6 +424,69 @@
           {/if}
         </div>
       </Panel>
+
+      <Panel manager={panels} id="attn" weight={1}>
+        {#snippet actions()}
+          <div class="toggle-group">
+            <button class:active={shade === 'surprisal'} onclick={() => (shade = 'surprisal')}>surprisal</button>
+            <button class:active={shade === 'attention'} onclick={() => (shade = 'attention')}>attention</button>
+          </div>
+        {/snippet}
+        <div class="attnbody scrollbar">
+          {#if shade !== 'attention'}
+            <div class="ghead mono faint">
+              switch the shade to “attention” — the trace then tints by where the
+              selected token's computation looked (value-weighted, all heads)
+            </div>
+          {:else if !sel}
+            <div class="ghead mono faint">select a token first</div>
+          {:else if attnLoading}
+            <div class="ghead mono faint">reading {sel.t} — one forward pass…</div>
+          {:else if attn}
+            <div class="statline mono faint">
+              {headSel ? `L${headSel.layer}·H${headSel.head}` : 'all heads (·‖v‖)'}
+              · prompt share {(promptShare * 100).toFixed(0)}%
+              · sink {(attn.vagg[0] * 100).toFixed(0)}%
+            </div>
+            <div class="headgrid" style="--cols: {attn.n_heads}">
+              {#each [...attn.heads].sort((a, b) => b.layer - a.layer || a.head - b.head) as h (h.layer * 100 + h.head)}
+                <button
+                  class="hcell"
+                  class:hsel={headSel !== null && headSel.layer === h.layer && headSel.head === h.head}
+                  style="--f: {headFocus(h).toFixed(3)}"
+                  title={`L${h.layer}·H${h.head} — entropy ${h.entropy.toFixed(1)}b, sink ${(h.sink * 100).toFixed(0)}%`}
+                  onclick={() => pickHead(h.layer, h.head)}
+                ></button>
+              {/each}
+            </div>
+            <div class="ghead mono faint">rows = layers (bottom row = layer 0) · click a head to isolate its gaze</div>
+          {/if}
+
+          {#if thinkSpan && sel && sel.pos > thinkSpan.end}
+            <div class="group">
+              <div class="ghead mono faint">attention → bits (causal)</div>
+              {#if ablate}
+                <div class="ladderline mono">
+                  “{ablate.token}” costs {ablate.baseline.bits.toFixed(2)}b with the trace,
+                  <b style="color:var(--model)">{ablate.masked.bits.toFixed(2)}b</b> without ⟨think⟩
+                  — Δ {ablate.delta_bits >= 0 ? '+' : ''}{ablate.delta_bits.toFixed(2)}b
+                </div>
+                <div class="ladderline mono faint">
+                  blind top-3: {#each ablate.masked.top.slice(0, 3) as d (d.t)}<span class="mono">“{d.t}” {(d.p * 100).toFixed(1)}% </span>{/each}
+                </div>
+              {:else}
+                <button class="ghost jbtn" onclick={runAblate} disabled={ablating || streaming}>
+                  {ablating ? 'masking the think region + re-forwarding…' : 're-price this token without ⟨think⟩'}
+                </button>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      </Panel>
+
+      <Panel manager={panels} id="guide" weight={1}>
+        <InterpretGuide sections={['bits', 'ladder', 'jlens', 'attn', 'ablate', 'repro', 'small']} />
+      </Panel>
     </div>
   </PanelHost>
 
@@ -346,6 +530,23 @@
   .fill { display: block; height: 100%; border-radius: 3px; }
   .pct { font-size: 10px; color: var(--muted); min-width: 44px; text-align: right; }
   .jbtn { font-size: 11px; align-self: flex-start; }
+
+  .attnbody { display: flex; flex-direction: column; gap: 8px; overflow: auto; min-height: 0; }
+  .statline { font-size: 10.5px; }
+  .headgrid {
+    display: grid;
+    grid-template-columns: repeat(var(--cols), 1fr);
+    gap: 2px;
+  }
+  .hcell {
+    all: unset;
+    aspect-ratio: 1;
+    border-radius: 2px;
+    cursor: pointer;
+    background: color-mix(in srgb, var(--model) calc(var(--f) * 85%), var(--bg-2));
+  }
+  .hcell:hover { outline: 1px solid var(--muted); }
+  .hcell.hsel { outline: 2px solid var(--data); }
 
   .transport-panel { display: flex; align-items: center; gap: 16px; padding: 8px 12px; }
   .note { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
