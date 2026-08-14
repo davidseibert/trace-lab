@@ -11,7 +11,6 @@
   import { router } from '../lib/router.svelte';
 
   import InterpretGuide from './InterpretGuide.svelte';
-  import Panel from './Panel.svelte';
   import PanelHost from './PanelHost.svelte';
   import TopBar from './shell/TopBar.svelte';
   import TransportBar from './shell/TransportBar.svelte';
@@ -19,12 +18,20 @@
   import LayerGrid from './logit/LayerGrid.svelte';
   import DepthChart from './logit/DepthChart.svelte';
 
-  const panels = new PanelManager('logit', [
-    { id: 'grid', title: 'Lens grid' },
-    { id: 'depth', title: 'Code length by depth' },
-    { id: 'readout', title: 'Rung readout' },
-    { id: 'guide', title: 'How to read this', collapsed: true }
-  ]);
+  const panels = new PanelManager(
+    'logit',
+    [
+      { id: 'grid', title: 'Lens grid', zoomable: true },
+      { id: 'depth', title: 'Code length by depth' },
+      { id: 'readout', title: 'Rung readout', zoomable: true },
+      { id: 'guide', title: 'How to read this', collapsed: true }
+    ],
+    {
+      columns: [['grid'], ['depth', 'readout', 'guide']],
+      widths: [3, 2],
+      weights: { grid: 2 }
+    }
+  );
 
   // The real-model counterpart of the mini-GPT lens: same Player, but the axis
   // is DEPTH, not training time — steps are residual-stream rungs.
@@ -217,41 +224,37 @@
     onUp={() => void run()}
   />
 {:else if resp}
-  <PanelHost manager={panels}>
-    <div class="col main">
-      <Panel manager={panels} id="grid" weight={2}>
-        {#snippet actions()}
-          <span class="mono">{resp!.layers.length} rungs × {resp!.tokens.length} positions</span>
-        {/snippet}
-        <LayerGrid
-          layers={resp.layers}
-          tokens={resp.tokens}
-          grid={resp.grid}
-          nPrompt={resp.n_prompt ?? resp.tokens.length}
-          index={cur}
-          {selPos}
-          onPick={pick}
-        />
-      </Panel>
-    </div>
+  {#snippet aGrid()}
+    <span class="mono">{resp!.layers.length} rungs × {resp!.tokens.length} positions</span>
+  {/snippet}
+  {#snippet pGrid()}
+    <LayerGrid
+      layers={resp!.layers}
+      tokens={resp!.tokens}
+      grid={resp!.grid}
+      nPrompt={resp!.n_prompt ?? resp!.tokens.length}
+      index={cur}
+      {selPos}
+      onPick={pick}
+    />
+  {/snippet}
 
-    <div class="col side">
-      <Panel manager={panels} id="depth" weight={1}>
-        <DepthChart
-          bits={ladder?.bits ?? resp.bits}
-          jbits={ladder?.jbits ?? null}
-          uniform={resp.uniform}
-          index={cur}
-          predToken={ladder?.pred.token ?? resp.pred.token}
-          onSeek={(i) => player.seek(i)}
-        />
-      </Panel>
+  {#snippet pDepth()}
+    <DepthChart
+      bits={ladder?.bits ?? resp!.bits}
+      jbits={ladder?.jbits ?? null}
+      uniform={resp!.uniform}
+      index={cur}
+      predToken={ladder?.pred.token ?? resp!.pred.token}
+      onSeek={(i) => player.seek(i)}
+    />
+  {/snippet}
 
-      <Panel manager={panels} id="readout" weight={1}>
-        {#snippet actions()}
-          <span class="mono">{resp!.layers[cur]} @ “{resp!.tokens[selPos]}”</span>
-        {/snippet}
-        <div class="readout scrollbar">
+  {#snippet aReadout()}
+    <span class="mono">{resp!.layers[cur]} @ “{resp!.tokens[selPos]}”</span>
+  {/snippet}
+  {#snippet pReadout()}
+    <div class="readout scrollbar">
           <div class="group">
             <div class="ghead mono faint">logit lens — decode the rung as-is</div>
             {#each cellTop as { t, p } (t)}
@@ -291,17 +294,21 @@
           {#if ladder}
             <div class="predline mono faint">
               after this: <b>{ladder.pred.token}</b> ({(ladder.pred.p * 100).toFixed(1)}%,
-              {ladder.pred.bits.toFixed(2)}b) · uniform {resp.uniform.toFixed(1)}b
+              {ladder.pred.bits.toFixed(2)}b) · uniform {resp!.uniform.toFixed(1)}b
             </div>
           {/if}
         </div>
-      </Panel>
+  {/snippet}
 
-      <Panel manager={panels} id="guide" weight={1}>
-        <InterpretGuide lens="logit" sections={['ladder', 'jlens', 'repro', 'small']} />
-      </Panel>
-    </div>
-  </PanelHost>
+  {#snippet pGuide()}
+    <InterpretGuide lens="logit" sections={['ladder', 'jlens', 'repro', 'small']} />
+  {/snippet}
+
+  <PanelHost
+    manager={panels}
+    snippets={{ grid: pGrid, depth: pDepth, readout: pReadout, guide: pGuide }}
+    actions={{ grid: aGrid, readout: aReadout }}
+  />
 
   <TransportBar {player} note={note + (error ? ` · ${error}` : '')} />
 {:else}
@@ -313,9 +320,6 @@
   .hint { max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
 
   .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
-
-  .col.main { flex: 3 1 0; }
-  .col.side { flex: 2 1 0; }
 
   .readout { display: flex; flex-direction: column; gap: 12px; overflow: auto; min-height: 0; }
   .group { display: flex; flex-direction: column; gap: 4px; }

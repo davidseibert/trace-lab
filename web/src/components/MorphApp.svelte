@@ -17,20 +17,27 @@
   import CostChart from './CostChart.svelte';
   import CandidatesTable from './CandidatesTable.svelte';
   import InterpretGuide from './InterpretGuide.svelte';
-  import Panel from './Panel.svelte';
   import PanelHost from './PanelHost.svelte';
   import TopBar from './shell/TopBar.svelte';
   import TransportBar from './shell/TransportBar.svelte';
   import { PanelManager } from '../lib/panels/panels.svelte';
 
-  const panels = new PanelManager('morph', [
-    { id: 'words', title: 'Lexicon & segmentation' },
-    { id: 'cands', title: 'Candidate merges' },
-    { id: 'input', title: 'Word list (data)' },
-    { id: 'cost', title: 'Description length' },
-    { id: 'chart', title: 'Evolution' },
-    { id: 'guide', title: 'How to read this', collapsed: true }
-  ]);
+  const panels = new PanelManager(
+    'morph',
+    [
+      { id: 'words', title: 'Lexicon & segmentation', zoomable: true },
+      { id: 'cands', title: 'Candidate merges', zoomable: true },
+      { id: 'input', title: 'Word list (data)' },
+      { id: 'cost', title: 'Description length', fit: true },
+      { id: 'chart', title: 'Evolution' },
+      { id: 'guide', title: 'How to read this', collapsed: true }
+    ],
+    {
+      columns: [['words', 'cands'], ['input', 'cost', 'chart', 'guide']],
+      widths: [1.45, 1],
+      weights: { words: 1.15, cands: 0.85, input: 0.85 }
+    }
+  );
 
   const SAMPLES = MORPH_SAMPLES;
   const DEFAULT_SAMPLE = MORPH_DEFAULT_SAMPLE;
@@ -93,29 +100,25 @@
 </TopBar>
 
 {#if cur}
-  <PanelHost manager={panels}>
-    <div class="col col-left">
-      <Panel manager={panels} id="words" weight={1.15}>
-        {#snippet actions()}
-          <span class="mono">{cur.model.rules.length} morph{cur.model.rules.length === 1 ? '' : 's'}</span>
-        {/snippet}
-        <WordListView model={cur.model} chosen={cur.chosen} />
-      </Panel>
+  {#snippet aWords()}
+    <span class="mono">{cur.model.rules.length} morph{cur.model.rules.length === 1 ? '' : 's'}</span>
+  {/snippet}
+  {#snippet pWords()}
+    <WordListView model={cur.model} chosen={cur.chosen} />
+  {/snippet}
 
-      <Panel manager={panels} id="cands" weight={0.85}>
-        {#snippet actions()}
-          <span class="mono">{cur.candidates.length} candidate{cur.candidates.length === 1 ? '' : 's'}</span>
-        {/snippet}
-        <CandidatesTable candidates={cur.candidates} baseline={cur.cost} chosen={cur.chosen} />
-      </Panel>
-    </div>
+  {#snippet aCands()}
+    <span class="mono">{cur.candidates.length} candidate{cur.candidates.length === 1 ? '' : 's'}</span>
+  {/snippet}
+  {#snippet pCands()}
+    <CandidatesTable candidates={cur.candidates} baseline={cur.cost} chosen={cur.chosen} />
+  {/snippet}
 
-    <div class="col col-right">
-      <Panel manager={panels} id="input" weight={0.85}>
-        {#snippet actions()}
-          <span class="mono">{wordCount} word{wordCount === 1 ? '' : 's'}</span>
-        {/snippet}
-        <div class="editor">
+  {#snippet aInput()}
+    <span class="mono">{wordCount} word{wordCount === 1 ? '' : 's'}</span>
+  {/snippet}
+  {#snippet pInput()}
+    <div class="editor">
           <label class="f">
             <span class="lbl">sample</span>
             <select value={sampleKey} onchange={(e) => pickSample((e.currentTarget as HTMLSelectElement).value)}>
@@ -126,32 +129,33 @@
                     placeholder="one word per line, optional “word count”…"></textarea>
           <p class="editor-hint faint">One word per line; add a count like <span class="mono">walking 8</span> to weight by frequency.</p>
         </div>
-      </Panel>
+  {/snippet}
 
-      <Panel manager={panels} id="cost" fit>
-        {#snippet actions()}
-          <span class="mono">step {player.index}</span>
-        {/snippet}
-        <CostPanel cost={cur.cost} {reference} />
-      </Panel>
+  {#snippet aCost()}
+    <span class="mono">step {player.index}</span>
+  {/snippet}
+  {#snippet pCost()}
+    <CostPanel cost={cur.cost} {reference} />
+  {/snippet}
 
-      <Panel manager={panels} id="chart" weight={1}>
-        <CostChart steps={player.steps} index={player.index} onSeek={(i) => player.seek(i)} />
-      </Panel>
+  {#snippet pChart()}
+    <CostChart steps={player.steps} index={player.index} onSeek={(i) => player.seek(i)} />
+  {/snippet}
 
-      <Panel manager={panels} id="guide" weight={1}>
-        <InterpretGuide lens="morph" sections={['mdlcore', 'codes', 'morphpair']} />
-      </Panel>
-    </div>
-  </PanelHost>
+  {#snippet pGuide()}
+    <InterpretGuide lens="morph" sections={['mdlcore', 'codes', 'morphpair']} />
+  {/snippet}
+
+  <PanelHost
+    manager={panels}
+    snippets={{ words: pWords, cands: pCands, input: pInput, cost: pCost, chart: pChart, guide: pGuide }}
+    actions={{ words: aWords, cands: aCands, input: aInput, cost: aCost }}
+  />
 
   <TransportBar {player} note={cur.note} converged={!cur.chosen} />
 {/if}
 
 <style>
-  .col-left { flex: 1.45 1 0; }
-  .col-right { flex: 1 1 0; }
-
   /* Word-list editor lives in its own panel; the textarea fills it. */
   .editor { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; }
   .editor .f { flex: 0 0 auto; }

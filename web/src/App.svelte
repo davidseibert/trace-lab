@@ -53,9 +53,11 @@
 
 <style>
   .app {
-    height: 100dvh;
-    max-width: 1500px;
-    margin: 0 auto;
+    /* 100% (not 100dvh): the html→body→#app chain is 100%, and an independent
+       dvh measure can exceed it, pushing the transport bar below the fold. */
+    height: 100%;
+    min-width: 0;
+    overflow: clip;
     padding: 8px;
     display: flex;
     flex-direction: column;

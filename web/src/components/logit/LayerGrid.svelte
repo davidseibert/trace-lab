@@ -74,8 +74,10 @@
 
 <style>
   .wrap { overflow: auto; min-height: 0; flex: 1 1 auto; }
-  table { border-collapse: collapse; font-size: 10.5px; }
-  th, td { padding: 2px 7px; text-align: left; white-space: nowrap; }
+  /* --zoom comes from the panel chrome (ctrl+wheel / title-bar controls);
+     em padding so cell geometry scales with the text. */
+  table { border-collapse: collapse; font-size: calc(10.5px * var(--zoom, 1)); }
+  th, td { padding: 0.19em 0.67em; text-align: left; white-space: nowrap; }
 
   th.pos {
     color: var(--muted);
@@ -83,6 +85,7 @@
     border-bottom: 1px solid var(--border);
     position: sticky;
     top: 0;
+    z-index: 2;
     background: var(--panel);
   }
   th.pos.sel { color: var(--text); }
@@ -93,8 +96,11 @@
     padding-right: 10px;
     position: sticky;
     left: 0;
+    z-index: 1;
     background: var(--panel);
   }
+  /* corner cell: sticky on both axes, above both header runs */
+  th.lname { top: 0; z-index: 3; }
   tr.cur td.lname { color: var(--model); }
 
   td.cell { cursor: pointer; border: 1px solid transparent; border-radius: 3px; }

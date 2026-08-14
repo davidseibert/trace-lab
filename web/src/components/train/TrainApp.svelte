@@ -12,18 +12,25 @@
   import { PanelManager } from '../../lib/panels/panels.svelte';
 
   import InterpretGuide from '../InterpretGuide.svelte';
-  import Panel from '../Panel.svelte';
   import PanelHost from '../PanelHost.svelte';
   import TopBar from '../shell/TopBar.svelte';
   import EngineOffline from '../shell/EngineOffline.svelte';
   import TrainChart from './TrainChart.svelte';
 
-  const panels = new PanelManager('train', [
-    { id: 'curve', title: 'Loss & held-out accuracy' },
-    { id: 'ckpts', title: 'Checkpoints' },
-    { id: 'about', title: 'The task' },
-    { id: 'guide', title: 'How to read this', collapsed: true }
-  ]);
+  const panels = new PanelManager(
+    'train',
+    [
+      { id: 'curve', title: 'Loss & held-out accuracy' },
+      { id: 'ckpts', title: 'Checkpoints' },
+      { id: 'about', title: 'The task' },
+      { id: 'guide', title: 'How to read this', collapsed: true }
+    ],
+    {
+      columns: [['curve'], ['ckpts', 'about', 'guide']],
+      widths: [2, 1.2],
+      weights: { curve: 2, ckpts: 1.2 }
+    }
+  );
 
   let epochs = $state(router.num('ep') ?? 40);
 
@@ -140,24 +147,20 @@
     what="This lens trains the tiny addition model on the local engine service."
   />
 {:else}
-  <PanelHost manager={panels}>
-    <div class="col main">
-      <Panel manager={panels} id="curve" weight={2}>
-        {#snippet actions()}
-          {#if start}
-            <span class="mono">{start.params_m}M params · {start.device} · {start.n_train} train / {start.n_test} held-out</span>
-          {/if}
-        {/snippet}
-        <TrainChart {rows} />
-      </Panel>
-    </div>
+  {#snippet aCurve()}
+    {#if start}
+      <span class="mono">{start.params_m}M params · {start.device} · {start.n_train} train / {start.n_test} held-out</span>
+    {/if}
+  {/snippet}
+  {#snippet pCurve()}
+    <TrainChart {rows} />
+  {/snippet}
 
-    <div class="col side">
-      <Panel manager={panels} id="ckpts" weight={1.2}>
-        {#snippet actions()}
-          <span class="mono">{ckpts.length} saved</span>
-        {/snippet}
-        <div class="ckpts scrollbar">
+  {#snippet aCkpts()}
+    <span class="mono">{ckpts.length} saved</span>
+  {/snippet}
+  {#snippet pCkpts()}
+    <div class="ckpts scrollbar">
           {#if ckpts.length === 0}
             <p class="faint">
               Three checkpoints land here as training runs — untrained, first ≥50%, converged —
@@ -181,10 +184,10 @@
             </p>
           {/if}
         </div>
-      </Panel>
+  {/snippet}
 
-      <Panel manager={panels} id="about" weight={1}>
-        <div class="about scrollbar">
+  {#snippet pAbout()}
+    <div class="about scrollbar">
           <p>
             Every <span class="mono">"a+b="</span> for a, b in 0–99, spelled one character per
             token over the vocabulary <span class="mono">0123456789+=</span>. Loss lands only on
@@ -196,13 +199,17 @@
             training-time axis that Logit·real's J-lens can then walk across checkpoints.
           </p>
         </div>
-      </Panel>
+  {/snippet}
 
-      <Panel manager={panels} id="guide" weight={1}>
-        <InterpretGuide lens="train" sections={['trainread']} />
-      </Panel>
-    </div>
-  </PanelHost>
+  {#snippet pGuide()}
+    <InterpretGuide lens="train" sections={['trainread']} />
+  {/snippet}
+
+  <PanelHost
+    manager={panels}
+    snippets={{ curve: pCurve, ckpts: pCkpts, about: pAbout, guide: pGuide }}
+    actions={{ curve: aCurve, ckpts: aCkpts }}
+  />
 
   <div class="panel statusbar">
     <span class="mono muted">{error ? `error · ${error}` : note || 'ready — press train'}</span>
@@ -212,9 +219,6 @@
 <style>
   .task { font-size: 11px; white-space: nowrap; }
   .ep { width: 56px; }
-
-  .col.main { flex: 2 1 0; }
-  .col.side { flex: 1.2 1 0; }
 
   .ckpts { display: flex; flex-direction: column; gap: 10px; overflow: auto; min-height: 0; }
   .ckpts p { margin: 0; font-size: 12px; line-height: 1.5; }

@@ -16,19 +16,26 @@
   import CostChart from './CostChart.svelte';
   import CandidatesTable from './CandidatesTable.svelte';
   import InterpretGuide from './InterpretGuide.svelte';
-  import Panel from './Panel.svelte';
   import PanelHost from './PanelHost.svelte';
   import TopBar from './shell/TopBar.svelte';
   import TransportBar from './shell/TransportBar.svelte';
   import { PanelManager } from '../lib/panels/panels.svelte';
 
-  const panels = new PanelManager('grammar', [
-    { id: 'grammar', title: 'Grammar' },
-    { id: 'cands', title: 'Candidate moves' },
-    { id: 'cost', title: 'Description length' },
-    { id: 'chart', title: 'Evolution' },
-    { id: 'guide', title: 'How to read this', collapsed: true }
-  ]);
+  const panels = new PanelManager(
+    'grammar',
+    [
+      { id: 'grammar', title: 'Grammar' },
+      { id: 'cands', title: 'Candidate moves', zoomable: true },
+      { id: 'cost', title: 'Description length', fit: true },
+      { id: 'chart', title: 'Evolution' },
+      { id: 'guide', title: 'How to read this', collapsed: true }
+    ],
+    {
+      columns: [['grammar', 'cands'], ['cost', 'chart', 'guide']],
+      widths: [1.45, 1],
+      weights: { grammar: 1.15, cands: 0.85 }
+    }
+  );
 
   const SAMPLES: Record<string, string> = {
     'the cat / the mat': 'the cat sat on the mat. the cat ate the rat. the rat sat.',
@@ -106,45 +113,40 @@
 </TopBar>
 
 {#if cur}
-  <PanelHost manager={panels}>
-    <div class="col col-left">
-      <Panel manager={panels} id="grammar" weight={1.15}>
-        {#snippet actions()}
-          <span class="mono">{cur.model.rules.length} rule{cur.model.rules.length === 1 ? '' : 's'}</span>
-        {/snippet}
-        <StreamView model={cur.model} chosen={cur.chosen} />
-      </Panel>
+  {#snippet aGrammar()}
+    <span class="mono">{cur.model.rules.length} rule{cur.model.rules.length === 1 ? '' : 's'}</span>
+  {/snippet}
+  {#snippet pGrammar()}
+    <StreamView model={cur.model} chosen={cur.chosen} />
+  {/snippet}
 
-      <Panel manager={panels} id="cands" weight={0.85}>
-        {#snippet actions()}
-          <span class="mono">{cur.candidates.length} candidate{cur.candidates.length === 1 ? '' : 's'}</span>
-        {/snippet}
-        <CandidatesTable candidates={cur.candidates} baseline={cur.cost} chosen={cur.chosen} />
-      </Panel>
-    </div>
+  {#snippet aCands()}
+    <span class="mono">{cur.candidates.length} candidate{cur.candidates.length === 1 ? '' : 's'}</span>
+  {/snippet}
+  {#snippet pCands()}
+    <CandidatesTable candidates={cur.candidates} baseline={cur.cost} chosen={cur.chosen} />
+  {/snippet}
 
-    <div class="col col-right">
-      <Panel manager={panels} id="cost" fit>
-        {#snippet actions()}
-          <span class="mono">step {player.index}</span>
-        {/snippet}
-        <CostPanel cost={cur.cost} {reference} />
-      </Panel>
+  {#snippet aCost()}
+    <span class="mono">step {player.index}</span>
+  {/snippet}
+  {#snippet pCost()}
+    <CostPanel cost={cur.cost} {reference} />
+  {/snippet}
 
-      <Panel manager={panels} id="chart" weight={1}>
-        <CostChart steps={player.steps} index={player.index} onSeek={(i) => player.seek(i)} />
-      </Panel>
+  {#snippet pChart()}
+    <CostChart steps={player.steps} index={player.index} onSeek={(i) => player.seek(i)} />
+  {/snippet}
 
-      <Panel manager={panels} id="guide" weight={1}>
-        <InterpretGuide lens="grammar" sections={['mdlcore', 'codes']} />
-      </Panel>
-    </div>
-  </PanelHost>
+  {#snippet pGuide()}
+    <InterpretGuide lens="grammar" sections={['mdlcore', 'codes']} />
+  {/snippet}
+
+  <PanelHost
+    manager={panels}
+    snippets={{ grammar: pGrammar, cands: pCands, cost: pCost, chart: pChart, guide: pGuide }}
+    actions={{ grammar: aGrammar, cands: aCands, cost: aCost }}
+  />
 
   <TransportBar {player} note={cur.note} converged={!cur.chosen} />
 {/if}
-
-<style>
-  .col-left { flex: 1.45 1 0; }
-  .col-right { flex: 1 1 0; }
-</style>

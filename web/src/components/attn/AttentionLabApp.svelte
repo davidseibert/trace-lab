@@ -7,7 +7,6 @@
   import { router } from '../../lib/router.svelte';
 
   import InterpretGuide from '../InterpretGuide.svelte';
-  import Panel from '../Panel.svelte';
   import PanelHost from '../PanelHost.svelte';
   import TopBar from '../shell/TopBar.svelte';
   import TransportBar from '../shell/TransportBar.svelte';
@@ -16,17 +15,29 @@
   import WeightEditor from './WeightEditor.svelte';
   import CellInspector from './CellInspector.svelte';
 
-  const panels = new PanelManager('attn', [
-    { id: 'tokens', title: 'Tokens' },
-    { id: 'input', title: 'Input embeddings (X)' },
-    { id: 'proj', title: 'Projections — Wq, Wk, Wv, Wo' },
-    { id: 'qkv', title: 'Q, K, V' },
-    { id: 'scores', title: 'Scores — QKᵀ, scaled' },
-    { id: 'weights', title: 'Attention weights' },
-    { id: 'output', title: 'Output — per head, concat, final' },
-    { id: 'inspect', title: 'Cell inspector' },
-    { id: 'guide', title: 'How to read this', collapsed: true }
-  ]);
+  const panels = new PanelManager(
+    'attn',
+    [
+      { id: 'tokens', title: 'Tokens', fit: true },
+      { id: 'input', title: 'Input embeddings (X)' },
+      { id: 'proj', title: 'Projections — Wq, Wk, Wv, Wo' },
+      { id: 'qkv', title: 'Q, K, V' },
+      { id: 'scores', title: 'Scores — QKᵀ, scaled' },
+      { id: 'weights', title: 'Attention weights' },
+      { id: 'output', title: 'Output — per head, concat, final' },
+      { id: 'inspect', title: 'Cell inspector' },
+      { id: 'guide', title: 'How to read this', collapsed: true }
+    ],
+    {
+      columns: [
+        ['tokens', 'input', 'proj'],
+        ['qkv', 'scores'],
+        ['weights', 'output', 'inspect', 'guide']
+      ],
+      widths: [1.1, 1.2, 1.1],
+      weights: { proj: 1.6, qkv: 1.3, scores: 1.3, weights: 1.4, output: 1.2 }
+    }
+  );
 
   const DMODEL_OPTS = [2, 4, 6, 8];
   const NHEADS_OPTS = [1, 2];
@@ -164,123 +175,139 @@
 </TopBar>
 
 {#if trace.T > 0}
-<PanelHost manager={panels}>
-  <div class="col col-a">
-    <Panel manager={panels} id="tokens" fit>
-      {#snippet actions()}<span class="mono">{trace.T} tokens · d_model {dModel} · {nHeads} head{nHeads === 1 ? '' : 's'}</span>{/snippet}
-      <div class="tokens">
-        {#each tokens as t, i}
-          <button
-            class="tchip mono"
-            class:focused={i === player.index}
-            style="color:{tokenColors[i]}; border-color:{tokenColors[i]}"
-            onclick={() => player.seek(i)}
-            title="Focus this token's attention pattern"
-          >
-            <span class="tpos faint">{i}</span>{t}
-          </button>
-        {/each}
-      </div>
-    </Panel>
-
-    <Panel manager={panels} id="input" weight={1}>
-      {#snippet actions()}<span class="mono">{trace.T} × {dModel} · editable</span>{/snippet}
-      <WeightEditor value={X} rowLabels={tokens} onChange={(v) => (X = v)} />
-    </Panel>
-
-    <Panel manager={panels} id="proj" weight={1.6}>
-      {#snippet actions()}<span class="mono">{dModel} × {dModel} each</span>{/snippet}
-      <div class="wgrid scrollbar">
-        <div class="wcol">
-          <div class="wlabel mono">Wq</div>
-          <WeightEditor value={Wq} onChange={(v) => (Wq = v)} />
-        </div>
-        <div class="wcol">
-          <div class="wlabel mono">Wk</div>
-          <WeightEditor value={Wk} onChange={(v) => (Wk = v)} />
-        </div>
-        <div class="wcol">
-          <div class="wlabel mono">Wv</div>
-          <WeightEditor value={Wv} onChange={(v) => (Wv = v)} />
-        </div>
-        <div class="wcol">
-          <div class="wlabel mono faint">Wo (output proj., auto)</div>
-          <ActGrid matrix={Wo} signed />
-        </div>
-      </div>
-    </Panel>
+{#snippet aTokens()}<span class="mono">{trace.T} tokens · d_model {dModel} · {nHeads} head{nHeads === 1 ? '' : 's'}</span>{/snippet}
+{#snippet pTokens()}
+  <div class="tokens">
+    {#each tokens as t, i}
+      <button
+        class="tchip mono"
+        class:focused={i === player.index}
+        style="color:{tokenColors[i]}; border-color:{tokenColors[i]}"
+        onclick={() => player.seek(i)}
+        title="Focus this token's attention pattern"
+      >
+        <span class="tpos faint">{i}</span>{t}
+      </button>
+    {/each}
   </div>
+{/snippet}
 
-  <div class="col col-b">
-    <Panel manager={panels} id="qkv" weight={1.3}>
-      {#snippet actions()}<span class="mono">headDim {trace.headDim}</span>{/snippet}
-      <div class="heads-col scrollbar">
-        {#each trace.heads as h}
-          <div class="hgroup">
-            {#if trace.heads.length > 1}<div class="head-title faint mono">head {h.head}</div>{/if}
-            <div class="triple">
-              <div class="qkv-col"><div class="qkv-label mono">Q</div><ActGrid matrix={h.Q} rowLabels={tokens} rowColors={tokenColors} signed /></div>
-              <div class="qkv-col"><div class="qkv-label mono">K</div><ActGrid matrix={h.K} rowLabels={tokens} rowColors={tokenColors} signed /></div>
-              <div class="qkv-col"><div class="qkv-label mono">V</div><ActGrid matrix={h.V} rowLabels={tokens} rowColors={tokenColors} signed /></div>
-            </div>
-          </div>
-        {/each}
-      </div>
-    </Panel>
+{#snippet aInput()}<span class="mono">{trace.T} × {dModel} · editable</span>{/snippet}
+{#snippet pInput()}
+  <WeightEditor value={X} rowLabels={tokens} onChange={(v) => (X = v)} />
+{/snippet}
 
-    <Panel manager={panels} id="scores" weight={1.3}>
-      {#snippet actions()}<span class="mono">click a cell → inspect</span>{/snippet}
-      <div class="heads-col scrollbar">
-        {#each trace.heads as h}
-          <div class="hgroup">
-            {#if trace.heads.length > 1}<div class="head-title faint mono">head {h.head}</div>{/if}
-            <div class="pair">
-              <div class="qkv-col"><div class="qkv-label mono">QKᵀ</div><ActGrid matrix={h.scores} rowLabels={tokens} rowColors={tokenColors} colLabel="keys" signed onCellClick={(r, c) => pickCell(h.head, r, c)} /></div>
-              <div class="qkv-col"><div class="qkv-label mono">÷ √{trace.headDim}</div><ActGrid matrix={h.scaled} rowLabels={tokens} rowColors={tokenColors} colLabel="keys" signed onCellClick={(r, c) => pickCell(h.head, r, c)} /></div>
-            </div>
-          </div>
-        {/each}
-      </div>
-    </Panel>
+{#snippet aProj()}<span class="mono">{dModel} × {dModel} each</span>{/snippet}
+{#snippet pProj()}
+  <div class="wgrid scrollbar">
+    <div class="wcol">
+      <div class="wlabel mono">Wq</div>
+      <WeightEditor value={Wq} onChange={(v) => (Wq = v)} />
+    </div>
+    <div class="wcol">
+      <div class="wlabel mono">Wk</div>
+      <WeightEditor value={Wk} onChange={(v) => (Wk = v)} />
+    </div>
+    <div class="wcol">
+      <div class="wlabel mono">Wv</div>
+      <WeightEditor value={Wv} onChange={(v) => (Wv = v)} />
+    </div>
+    <div class="wcol">
+      <div class="wlabel mono faint">Wo (output proj., auto)</div>
+      <ActGrid matrix={Wo} signed />
+    </div>
   </div>
+{/snippet}
 
-  <div class="col col-c">
-    <Panel manager={panels} id="weights" weight={1.4}>
-      {#snippet actions()}<span class="mono">focus: {tokens[player.index]}</span>{/snippet}
-      <AttentionView attn={combinedWeights} {tokens} {tokenColors} focusPos={player.index} onCellClick={(h, r, c) => pickCell(h, r, c)} />
-    </Panel>
-
-    <Panel manager={panels} id="output" weight={1.2}>
-      {#snippet actions()}<span class="mono">weights · V, then · Wo</span>{/snippet}
-      <div class="heads-col scrollbar">
-        {#each trace.heads as h}
-          <div class="hgroup">
-            {#if trace.heads.length > 1}<div class="head-title faint mono">head {h.head} output</div>{/if}
-            <ActGrid matrix={h.output} rowLabels={tokens} rowColors={tokenColors} signed />
-          </div>
-        {/each}
-        {#if trace.heads.length > 1}
-          <div class="hgroup">
-            <div class="head-title faint mono">concat(heads)</div>
-            <ActGrid matrix={trace.concat} rowLabels={tokens} rowColors={tokenColors} signed />
-          </div>
-        {/if}
-        <div class="hgroup">
-          <div class="head-title faint mono">final = concat · Wo</div>
-          <ActGrid matrix={trace.output} rowLabels={tokens} rowColors={tokenColors} signed />
+{#snippet aQkv()}<span class="mono">headDim {trace.headDim}</span>{/snippet}
+{#snippet pQkv()}
+  <div class="heads-col scrollbar">
+    {#each trace.heads as h}
+      <div class="hgroup">
+        {#if trace.heads.length > 1}<div class="head-title faint mono">head {h.head}</div>{/if}
+        <div class="triple">
+          <div class="qkv-col"><div class="qkv-label mono">Q</div><ActGrid matrix={h.Q} rowLabels={tokens} rowColors={tokenColors} signed /></div>
+          <div class="qkv-col"><div class="qkv-label mono">K</div><ActGrid matrix={h.K} rowLabels={tokens} rowColors={tokenColors} signed /></div>
+          <div class="qkv-col"><div class="qkv-label mono">V</div><ActGrid matrix={h.V} rowLabels={tokens} rowColors={tokenColors} signed /></div>
         </div>
       </div>
-    </Panel>
-
-    <Panel manager={panels} id="inspect" weight={1}>
-      <CellInspector {trace} {tokens} {selected} />
-    </Panel>
-
-    <Panel manager={panels} id="guide" weight={1}>
-      <InterpretGuide lens="attn" sections={['attnlab']} />
-    </Panel>
+    {/each}
   </div>
-</PanelHost>
+{/snippet}
+
+{#snippet aScores()}<span class="mono">click a cell → inspect</span>{/snippet}
+{#snippet pScores()}
+  <div class="heads-col scrollbar">
+    {#each trace.heads as h}
+      <div class="hgroup">
+        {#if trace.heads.length > 1}<div class="head-title faint mono">head {h.head}</div>{/if}
+        <div class="pair">
+          <div class="qkv-col"><div class="qkv-label mono">QKᵀ</div><ActGrid matrix={h.scores} rowLabels={tokens} rowColors={tokenColors} colLabel="keys" signed onCellClick={(r, c) => pickCell(h.head, r, c)} /></div>
+          <div class="qkv-col"><div class="qkv-label mono">÷ √{trace.headDim}</div><ActGrid matrix={h.scaled} rowLabels={tokens} rowColors={tokenColors} colLabel="keys" signed onCellClick={(r, c) => pickCell(h.head, r, c)} /></div>
+        </div>
+      </div>
+    {/each}
+  </div>
+{/snippet}
+
+{#snippet aWeights()}<span class="mono">focus: {tokens[player.index]}</span>{/snippet}
+{#snippet pWeights()}
+  <AttentionView attn={combinedWeights} {tokens} {tokenColors} focusPos={player.index} onCellClick={(h, r, c) => pickCell(h, r, c)} />
+{/snippet}
+
+{#snippet aOutput()}<span class="mono">weights · V, then · Wo</span>{/snippet}
+{#snippet pOutput()}
+  <div class="heads-col scrollbar">
+    {#each trace.heads as h}
+      <div class="hgroup">
+        {#if trace.heads.length > 1}<div class="head-title faint mono">head {h.head} output</div>{/if}
+        <ActGrid matrix={h.output} rowLabels={tokens} rowColors={tokenColors} signed />
+      </div>
+    {/each}
+    {#if trace.heads.length > 1}
+      <div class="hgroup">
+        <div class="head-title faint mono">concat(heads)</div>
+        <ActGrid matrix={trace.concat} rowLabels={tokens} rowColors={tokenColors} signed />
+      </div>
+    {/if}
+    <div class="hgroup">
+      <div class="head-title faint mono">final = concat · Wo</div>
+      <ActGrid matrix={trace.output} rowLabels={tokens} rowColors={tokenColors} signed />
+    </div>
+  </div>
+{/snippet}
+
+{#snippet pInspect()}
+  <CellInspector {trace} {tokens} {selected} />
+{/snippet}
+
+{#snippet pGuide()}
+  <InterpretGuide lens="attn" sections={['attnlab']} />
+{/snippet}
+
+<PanelHost
+  manager={panels}
+  snippets={{
+    tokens: pTokens,
+    input: pInput,
+    proj: pProj,
+    qkv: pQkv,
+    scores: pScores,
+    weights: pWeights,
+    output: pOutput,
+    inspect: pInspect,
+    guide: pGuide
+  }}
+  actions={{
+    tokens: aTokens,
+    input: aInput,
+    proj: aProj,
+    qkv: aQkv,
+    scores: aScores,
+    weights: aWeights,
+    output: aOutput
+  }}
+/>
 
 <TransportBar {player}>
   scrubbing focuses the arc diagram + weights on token <b>{tokens[player.index]}</b> (position {player.index})
@@ -292,10 +319,6 @@
   .q-input { width: 160px; font-size: 12px; padding: 5px 8px; }
   .endspacer { flex: 0 1 auto; margin-left: auto; }
   button.ghost.active { border-color: var(--model); color: var(--model); }
-
-  .col-a { flex: 1.1 1 0; }
-  .col-b { flex: 1.2 1 0; }
-  .col-c { flex: 1.1 1 0; }
 
   .tokens { display: flex; flex-wrap: wrap; gap: 5px; }
   .tchip {

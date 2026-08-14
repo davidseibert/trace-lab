@@ -31,7 +31,8 @@ html, body {
   margin: 0;
   padding: 0;
   height: 100%;
-  overflow: hidden; /* the app fills exactly one viewport; panels scroll internally */
+  overflow: clip; /* the app fills exactly one viewport; panels scroll internally.
+                     clip (not hidden) also forbids programmatic scroll-shuffle. */
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
@@ -113,9 +114,6 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 .warn.bad { color: var(--bad); }
 .status { font-size: 10.5px; color: var(--good); white-space: nowrap; }
 .status.off { color: var(--bad); }
-
-/* Panel-column skeleton shared by every lens layout. */
-.col { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0; }
 
 .scrollbar::-webkit-scrollbar { height: 8px; width: 8px; }
 .scrollbar::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }

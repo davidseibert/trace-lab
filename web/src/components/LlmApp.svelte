@@ -8,7 +8,6 @@
   import { router } from '../lib/router.svelte';
 
   import InterpretGuide from './InterpretGuide.svelte';
-  import Panel from './Panel.svelte';
   import PanelHost from './PanelHost.svelte';
   import TopBar from './shell/TopBar.svelte';
   import TransportBar from './shell/TransportBar.svelte';
@@ -20,19 +19,31 @@
   import ImplantPanel from './llm/ImplantPanel.svelte';
   import { PanelManager } from '../lib/panels/panels.svelte';
 
-  const panels = new PanelManager('llm', [
-    { id: 'tokens', title: 'Tokens' },
-    { id: 'embed', title: 'Token embeddings' },
-    { id: 'pos', title: 'With position' },
-    { id: 'attn', title: 'Attention' },
-    { id: 'ffn', title: 'Feed-forward' },
-    { id: 'implant', title: 'Implant facts' },
-    { id: 'output', title: 'Next-token guess' },
-    { id: 'lens', title: 'Logit lens' },
-    { id: 'loss', title: 'Loss over training' },
-    { id: 'explain', title: 'Readout' },
-    { id: 'guide', title: 'How to read this', collapsed: true }
-  ]);
+  const panels = new PanelManager(
+    'llm',
+    [
+      { id: 'tokens', title: 'Tokens', fit: true },
+      { id: 'embed', title: 'Token embeddings' },
+      { id: 'pos', title: 'With position' },
+      { id: 'attn', title: 'Attention' },
+      { id: 'ffn', title: 'Feed-forward' },
+      { id: 'implant', title: 'Implant facts' },
+      { id: 'output', title: 'Next-token guess' },
+      { id: 'lens', title: 'Logit lens' },
+      { id: 'loss', title: 'Loss over training' },
+      { id: 'explain', title: 'Readout', fit: true },
+      { id: 'guide', title: 'How to read this', collapsed: true }
+    ],
+    {
+      columns: [
+        ['tokens', 'embed', 'pos', 'loss'],
+        ['attn', 'ffn', 'implant'],
+        ['output', 'lens', 'explain', 'guide']
+      ],
+      widths: [1, 1.3, 1.1],
+      weights: { loss: 0.8, attn: 1.5, implant: 1.1, output: 1.3, lens: 1.2 }
+    }
+  );
 
   const STEPS = 300;
   const dsParam = router.get('ds');
@@ -224,109 +235,129 @@
 </TopBar>
 
 {#if activeViz}
-  <PanelHost manager={panels}>
-    <div class="col col-a">
-      <Panel manager={panels} id="tokens" fit>
-        {#snippet actions()}<span class="mono">{activeTokens.length} tokens · {isQuery ? 'query' : 'probe'}</span>{/snippet}
-        <div class="tokens">
-          {#each activeTokens as t, i}
-            <span class="tchip mono" style="color:{activeColors[i]}; border-color:{activeColors[i]}">
-              <span class="tpos faint">{i}</span>{t}
-            </span>
-          {/each}
-        </div>
-      </Panel>
-
-      <Panel manager={panels} id="embed" weight={1}>
-        {#snippet actions()}<span class="mono">{ds.embDim}d</span>{/snippet}
-        <ActGrid matrix={activeViz.tokEmb} rowLabels={activeTokens} rowColors={activeColors} signed />
-      </Panel>
-
-      <Panel manager={panels} id="pos" weight={1}>
-        {#snippet actions()}<span class="mono">token + position</span>{/snippet}
-        <ActGrid matrix={activeViz.embedded} rowLabels={activeTokens} rowColors={activeColors} signed />
-      </Panel>
-
-      <Panel manager={panels} id="loss" weight={0.8}>
-        {#snippet actions()}<span class="mono">loss {stepLoss.toFixed(3)}</span>{/snippet}
-        <LossChart steps={player.steps} index={player.index} onSeek={(i) => player.seek(i)} />
-      </Panel>
+  {#snippet aTokens()}<span class="mono">{activeTokens.length} tokens · {isQuery ? 'query' : 'probe'}</span>{/snippet}
+  {#snippet pTokens()}
+    <div class="tokens">
+      {#each activeTokens as t, i}
+        <span class="tchip mono" style="color:{activeColors[i]}; border-color:{activeColors[i]}">
+          <span class="tpos faint">{i}</span>{t}
+        </span>
+      {/each}
     </div>
+  {/snippet}
 
-    <div class="col col-b">
-      <Panel manager={panels} id="attn" weight={1.5}>
-        {#snippet actions()}<span class="mono">{ds.nHeads} heads</span>{/snippet}
-        <AttentionView attn={activeViz.attn} tokens={activeTokens} tokenColors={activeColors} />
-      </Panel>
+  {#snippet aEmbed()}<span class="mono">{ds.embDim}d</span>{/snippet}
+  {#snippet pEmbed()}
+    <ActGrid matrix={activeViz!.tokEmb} rowLabels={activeTokens} rowColors={activeColors} signed />
+  {/snippet}
 
-      <Panel manager={panels} id="ffn" weight={1}>
-        {#snippet actions()}<span class="mono">{ds.ffnHid}{facts.length ? `+${facts.length}` : ''} units</span>{/snippet}
-        <ActGrid
-          matrix={activeViz.ffnHidden}
-          rowLabels={activeTokens}
-          rowColors={activeColors}
-          signed={false}
-          colLabel={facts.length ? `units (last ${facts.length} implanted)` : 'units'}
-        />
-      </Panel>
+  {#snippet aPos()}<span class="mono">token + position</span>{/snippet}
+  {#snippet pPos()}
+    <ActGrid matrix={activeViz!.embedded} rowLabels={activeTokens} rowColors={activeColors} signed />
+  {/snippet}
 
-      <Panel manager={panels} id="implant" weight={1.1}>
-        {#snippet actions()}<span class="mono">{facts.length} fact{facts.length === 1 ? '' : 's'}</span>{/snippet}
-        <ImplantPanel {ds} {facts} rows={interferenceRows} onAdd={addFact} onRemove={removeFact} />
-      </Panel>
+  {#snippet aLoss()}<span class="mono">loss {stepLoss.toFixed(3)}</span>{/snippet}
+  {#snippet pLoss()}
+    <LossChart steps={player.steps} index={player.index} onSeek={(i) => player.seek(i)} />
+  {/snippet}
+
+  {#snippet aAttn()}<span class="mono">{ds.nHeads} heads</span>{/snippet}
+  {#snippet pAttn()}
+    <AttentionView attn={activeViz!.attn} tokens={activeTokens} tokenColors={activeColors} />
+  {/snippet}
+
+  {#snippet aFfn()}<span class="mono">{ds.ffnHid}{facts.length ? `+${facts.length}` : ''} units</span>{/snippet}
+  {#snippet pFfn()}
+    <ActGrid
+      matrix={activeViz!.ffnHidden}
+      rowLabels={activeTokens}
+      rowColors={activeColors}
+      signed={false}
+      colLabel={facts.length ? `units (last ${facts.length} implanted)` : 'units'}
+    />
+  {/snippet}
+
+  {#snippet aImplant()}<span class="mono">{facts.length} fact{facts.length === 1 ? '' : 's'}</span>{/snippet}
+  {#snippet pImplant()}
+    <ImplantPanel {ds} {facts} rows={interferenceRows} onAdd={addFact} onRemove={removeFact} />
+  {/snippet}
+
+  {#snippet aOutput()}<span class="mono">{(activePred.conf * 100).toFixed(0)}% peak</span>{/snippet}
+  {#snippet pOutput()}
+    <OutputBars probs={activeViz!.probs} vocab={ds.vocab} colors={vocabColors} predId={activePred.id} targetToken={isQuery ? '' : ds.probeTarget} />
+  {/snippet}
+
+  {#snippet aLens()}<span class="mono">−log₂ p by depth</span>{/snippet}
+  {#snippet pLens()}
+    {#if lensReport}
+      <LensView report={lensReport} vocab={ds.vocab} colors={vocabColors} focusId={activePred.id} />
+    {/if}
+  {/snippet}
+
+  {#snippet pExplain()}
+    <div class="readout">
+      {#if isQuery}
+        <p class="say">
+          Your prompt <span class="mono">“{activeTokens.join(' ')}”</span> at step <b>{player.index}</b>
+          → the model predicts
+          <b class="mono" style="color:{vocabColors[activePred.id]}">{activePred.token}</b>
+          at <b>{(activePred.conf * 100).toFixed(0)}%</b>.
+        </p>
+        <p class="say muted">Scrub the timeline to watch this prediction form as the model trains.</p>
+      {:else}
+        <p class="say">
+          After <b>{player.index}</b> step{player.index === 1 ? '' : 's'}, the model reads
+          <span class="mono">“{ds.probe.join(' ')}”</span> and predicts
+          <b class="mono" style="color:{vocabColors[activePred.id]}">{activePred.token}</b>
+          at <b>{(activePred.conf * 100).toFixed(0)}%</b>.
+        </p>
+        <p class="say muted">
+          Correct continuation <span class="mono" style="color:{tokenColor(ds, ds.probeTarget)}">{ds.probeTarget}</span>
+          sits at <b>{(activeTargetProb * 100).toFixed(0)}%</b>
+          {#if probeLearned}<span class="good"> — learned ✓</span>{/if}
+        </p>
+      {/if}
+      {#if facts.length}
+        <p class="say muted">
+          <b>{facts.length}</b> implanted fact{facts.length === 1 ? '' : 's'} active — written
+          straight into the FFN as key→value memory slots, no training. They re-apply at
+          every step, so scrubbing shows the same surgery against different weights.
+        </p>
+      {/if}
     </div>
+  {/snippet}
 
-    <div class="col col-c">
-      <Panel manager={panels} id="output" weight={1.3}>
-        {#snippet actions()}<span class="mono">{(activePred.conf * 100).toFixed(0)}% peak</span>{/snippet}
-        <OutputBars probs={activeViz.probs} vocab={ds.vocab} colors={vocabColors} predId={activePred.id} targetToken={isQuery ? '' : ds.probeTarget} />
-      </Panel>
+  {#snippet pGuide()}
+    <InterpretGuide lens="llm" sections={['minigpt']} />
+  {/snippet}
 
-      <Panel manager={panels} id="lens" weight={1.2}>
-        {#snippet actions()}<span class="mono">−log₂ p by depth</span>{/snippet}
-        {#if lensReport}
-          <LensView report={lensReport} vocab={ds.vocab} colors={vocabColors} focusId={activePred.id} />
-        {/if}
-      </Panel>
-
-      <Panel manager={panels} id="explain" fit>
-        <div class="readout">
-          {#if isQuery}
-            <p class="say">
-              Your prompt <span class="mono">“{activeTokens.join(' ')}”</span> at step <b>{player.index}</b>
-              → the model predicts
-              <b class="mono" style="color:{vocabColors[activePred.id]}">{activePred.token}</b>
-              at <b>{(activePred.conf * 100).toFixed(0)}%</b>.
-            </p>
-            <p class="say muted">Scrub the timeline to watch this prediction form as the model trains.</p>
-          {:else}
-            <p class="say">
-              After <b>{player.index}</b> step{player.index === 1 ? '' : 's'}, the model reads
-              <span class="mono">“{ds.probe.join(' ')}”</span> and predicts
-              <b class="mono" style="color:{vocabColors[activePred.id]}">{activePred.token}</b>
-              at <b>{(activePred.conf * 100).toFixed(0)}%</b>.
-            </p>
-            <p class="say muted">
-              Correct continuation <span class="mono" style="color:{tokenColor(ds, ds.probeTarget)}">{ds.probeTarget}</span>
-              sits at <b>{(activeTargetProb * 100).toFixed(0)}%</b>
-              {#if probeLearned}<span class="good"> — learned ✓</span>{/if}
-            </p>
-          {/if}
-          {#if facts.length}
-            <p class="say muted">
-              <b>{facts.length}</b> implanted fact{facts.length === 1 ? '' : 's'} active — written
-              straight into the FFN as key→value memory slots, no training. They re-apply at
-              every step, so scrubbing shows the same surgery against different weights.
-            </p>
-          {/if}
-        </div>
-      </Panel>
-
-      <Panel manager={panels} id="guide" weight={1}>
-        <InterpretGuide lens="llm" sections={['minigpt']} />
-      </Panel>
-    </div>
-  </PanelHost>
+  <PanelHost
+    manager={panels}
+    snippets={{
+      tokens: pTokens,
+      embed: pEmbed,
+      pos: pPos,
+      loss: pLoss,
+      attn: pAttn,
+      ffn: pFfn,
+      implant: pImplant,
+      output: pOutput,
+      lens: pLens,
+      explain: pExplain,
+      guide: pGuide
+    }}
+    actions={{
+      tokens: aTokens,
+      embed: aEmbed,
+      pos: aPos,
+      loss: aLoss,
+      attn: aAttn,
+      ffn: aFfn,
+      implant: aImplant,
+      output: aOutput,
+      lens: aLens
+    }}
+  />
 
   <TransportBar {player} {note} converged={!cur?.chosen} />
 {/if}
@@ -339,10 +370,6 @@
   .viewing { font-size: 11px; color: var(--muted); white-space: nowrap; }
   .viewing.q { color: var(--chosen); }
   .endspacer { flex: 0 1 auto; margin-left: auto; }
-
-  .col-a { flex: 1 1 0; }
-  .col-b { flex: 1.3 1 0; }
-  .col-c { flex: 1.1 1 0; }
 
   .tokens { display: flex; flex-wrap: wrap; gap: 5px; }
   .tchip {

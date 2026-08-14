@@ -20,21 +20,28 @@
   import CostChart from './CostChart.svelte';
   import CandidatesTable from './CandidatesTable.svelte';
   import InterpretGuide from './InterpretGuide.svelte';
-  import Panel from './Panel.svelte';
   import PanelHost from './PanelHost.svelte';
   import TopBar from './shell/TopBar.svelte';
   import TransportBar from './shell/TransportBar.svelte';
   import { PanelManager } from '../lib/panels/panels.svelte';
 
-  const panels = new PanelManager('graph', [
-    { id: 'graph', title: 'Graph' },
-    { id: 'cands', title: 'Candidate substructures' },
-    { id: 'subs', title: 'Dictionary' },
-    { id: 'cost', title: 'Description length' },
-    { id: 'chart', title: 'Evolution' },
-    { id: 'input', title: 'Edge list (data)' },
-    { id: 'guide', title: 'How to read this', collapsed: true }
-  ]);
+  const panels = new PanelManager(
+    'graph',
+    [
+      { id: 'graph', title: 'Graph' },
+      { id: 'cands', title: 'Candidate substructures' },
+      { id: 'subs', title: 'Dictionary' },
+      { id: 'cost', title: 'Description length', fit: true },
+      { id: 'chart', title: 'Evolution' },
+      { id: 'input', title: 'Edge list (data)' },
+      { id: 'guide', title: 'How to read this', collapsed: true }
+    ],
+    {
+      columns: [['subs'], ['graph', 'cands'], ['cost', 'chart', 'input', 'guide']],
+      widths: [0.5, 1.5, 1],
+      weights: { graph: 1.5, cands: 0.8, chart: 0.9, input: 0.8, guide: 0.9 }
+    }
+  );
 
   // A directed 3-cycle of identically-labeled nodes — the repeated motif.
   const tri = (i: number) =>
@@ -201,67 +208,61 @@ hall:N grand:A amod`;
 </TopBar>
 
 {#if cur}
-  <PanelHost manager={panels}>
-    <div class="col col-dict">
-      <Panel manager={panels} id="subs" weight={1}>
-        {#snippet actions()}
-          <span class="mono">{cur.model.subs.length} sub{cur.model.subs.length === 1 ? '' : 's'}</span>
-        {/snippet}
-        <SubstructuresView model={cur.model} />
-      </Panel>
-    </div>
+  {#snippet aSubs()}
+    <span class="mono">{cur!.model.subs.length} sub{cur!.model.subs.length === 1 ? '' : 's'}</span>
+  {/snippet}
+  {#snippet pSubs()}
+    <SubstructuresView model={cur!.model} />
+  {/snippet}
 
-    <div class="col col-mid">
-      <Panel manager={panels} id="graph" weight={1.5}>
-        {#snippet actions()}
-          <span class="mono">{cur.model.subs.length} sub{cur.model.subs.length === 1 ? '' : 's'}</span>
-        {/snippet}
-        <GraphView model={cur.model} {layout} chosen={cur.chosen} />
-      </Panel>
+  {#snippet aGraph()}
+    <span class="mono">{cur!.model.subs.length} sub{cur!.model.subs.length === 1 ? '' : 's'}</span>
+  {/snippet}
+  {#snippet pGraph()}
+    <GraphView model={cur!.model} {layout} chosen={cur!.chosen} />
+  {/snippet}
 
-      <Panel manager={panels} id="cands" weight={0.8}>
-        {#snippet actions()}
-          <span class="mono">{cur.candidates.length} candidate{cur.candidates.length === 1 ? '' : 's'}</span>
-        {/snippet}
-        <CandidatesTable candidates={cur.candidates} baseline={cur.cost} chosen={cur.chosen} />
-      </Panel>
-    </div>
+  {#snippet aCands()}
+    <span class="mono">{cur!.candidates.length} candidate{cur!.candidates.length === 1 ? '' : 's'}</span>
+  {/snippet}
+  {#snippet pCands()}
+    <CandidatesTable candidates={cur!.candidates} baseline={cur!.cost} chosen={cur!.chosen} />
+  {/snippet}
 
-    <div class="col col-right">
-      <Panel manager={panels} id="cost" fit>
-        {#snippet actions()}
-          <span class="mono">step {player.index}</span>
-        {/snippet}
-        <CostPanel cost={cur.cost} {reference} />
-      </Panel>
+  {#snippet aCost()}
+    <span class="mono">step {player.index}</span>
+  {/snippet}
+  {#snippet pCost()}
+    <CostPanel cost={cur!.cost} {reference} />
+  {/snippet}
 
-      <Panel manager={panels} id="chart" weight={0.9}>
-        <CostChart steps={player.steps} index={player.index} onSeek={(i) => player.seek(i)} />
-      </Panel>
+  {#snippet pChart()}
+    <CostChart steps={player.steps} index={player.index} onSeek={(i) => player.seek(i)} />
+  {/snippet}
 
-      <Panel manager={panels} id="input" weight={0.8}>
-        <textarea
-          class="edge-input mono scrollbar"
-          bind:value={text}
-          spellcheck="false"
-          placeholder={'src:Label  dst:Label  EDGELABEL\none edge per line'}
-        ></textarea>
-      </Panel>
+  {#snippet pInput()}
+    <textarea
+      class="edge-input mono scrollbar"
+      bind:value={text}
+      spellcheck="false"
+      placeholder={'src:Label  dst:Label  EDGELABEL\none edge per line'}
+    ></textarea>
+  {/snippet}
 
-      <Panel manager={panels} id="guide" weight={0.9}>
-        <InterpretGuide lens="graph" sections={['mdlcore', 'codes', 'graphread']} />
-      </Panel>
-    </div>
-  </PanelHost>
+  {#snippet pGuide()}
+    <InterpretGuide lens="graph" sections={['mdlcore', 'codes', 'graphread']} />
+  {/snippet}
+
+  <PanelHost
+    manager={panels}
+    snippets={{ subs: pSubs, graph: pGraph, cands: pCands, cost: pCost, chart: pChart, input: pInput, guide: pGuide }}
+    actions={{ subs: aSubs, graph: aGraph, cands: aCands, cost: aCost }}
+  />
 
   <TransportBar {player} note={cur.note} converged={!cur.chosen} />
 {/if}
 
 <style>
-  .col-dict { flex: 0.5 1 0; }
-  .col-mid { flex: 1.5 1 0; }
-  .col-right { flex: 1 1 0; }
-
   .edge-input {
     flex: 1 1 auto; min-height: 0; width: 100%; resize: none;
     background: var(--bg-2); color: var(--text);

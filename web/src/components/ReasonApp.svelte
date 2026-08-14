@@ -16,7 +16,6 @@
   import { router } from '../lib/router.svelte';
 
   import InterpretGuide from './InterpretGuide.svelte';
-  import Panel from './Panel.svelte';
   import PanelHost from './PanelHost.svelte';
   import TopBar from './shell/TopBar.svelte';
   import TransportBar from './shell/TransportBar.svelte';
@@ -25,14 +24,22 @@
   import TraceView from './reason/TraceView.svelte';
   import TokenBitsStrip from './reason/TokenBitsStrip.svelte';
 
-  const panels = new PanelManager('reason', [
-    { id: 'trace', title: 'Reasoning trace' },
-    { id: 'tokbits', title: 'Code length per token' },
-    { id: 'depth', title: 'Code length by depth' },
-    { id: 'readout', title: 'Column readout' },
-    { id: 'attn', title: 'Attention' },
-    { id: 'guide', title: 'How to read this', collapsed: true }
-  ]);
+  const panels = new PanelManager(
+    'reason',
+    [
+      { id: 'trace', title: 'Reasoning trace', zoomable: true },
+      { id: 'tokbits', title: 'Code length per token' },
+      { id: 'depth', title: 'Code length by depth' },
+      { id: 'readout', title: 'Column readout', zoomable: true },
+      { id: 'attn', title: 'Attention' },
+      { id: 'guide', title: 'How to read this', collapsed: true }
+    ],
+    {
+      columns: [['trace', 'tokbits'], ['depth', 'readout', 'attn', 'guide']],
+      widths: [3, 2],
+      weights: { trace: 2 }
+    }
+  );
 
   // The player scrubs TOKENS here (the mini-GPT lens scrubs training steps,
   // Logit·real scrubs rungs): playing replays the trace being generated.
@@ -365,48 +372,45 @@
 {#if !engine.up && !meta}
   <EngineOffline what="This lens streams a reasoning model through the local engine service." />
 {:else if meta}
-  <PanelHost manager={panels}>
-    <div class="col main">
-      <Panel manager={panels} id="trace" weight={2}>
-        {#snippet actions()}
-          <span class="mono">
-            {player.count} tokens{streaming ? ' · generating…' : doneReason ? ` · ${doneReason}` : ''}
-            {#if meta && meta.temperature > 0}· temp {meta.temperature} seed {meta.seed}{/if}
-          </span>
-        {/snippet}
-        <TraceView
-          steps={player.steps}
-          selected={player.index}
-          reveal={player.index}
-          {overlay}
-          {prefix}
-          onPick={(i) => player.seek(i)}
-        />
-      </Panel>
-      <Panel manager={panels} id="tokbits" weight={1}>
-        <TokenBitsStrip steps={player.steps} selected={player.index} onPick={(i) => player.seek(i)} />
-      </Panel>
-    </div>
+  {#snippet aTrace()}
+    <span class="mono">
+      {player.count} tokens{streaming ? ' · generating…' : doneReason ? ` · ${doneReason}` : ''}
+      {#if meta && meta.temperature > 0}· temp {meta.temperature} seed {meta.seed}{/if}
+    </span>
+  {/snippet}
+  {#snippet pTrace()}
+    <TraceView
+      steps={player.steps}
+      selected={player.index}
+      reveal={player.index}
+      {overlay}
+      {prefix}
+      onPick={(i) => player.seek(i)}
+    />
+  {/snippet}
 
-    <div class="col side">
-      <Panel manager={panels} id="depth" weight={1}>
-        {#if sel}
-          <DepthChart
-            bits={sel.bits}
-            jbits={jMatches ? jcol!.jbits : null}
-            uniform={meta.uniform}
-            index={rung}
-            predToken={sel.t}
-            onSeek={(i) => (rung = i)}
-          />
-        {/if}
-      </Panel>
+  {#snippet pTokbits()}
+    <TokenBitsStrip steps={player.steps} selected={player.index} onPick={(i) => player.seek(i)} />
+  {/snippet}
 
-      <Panel manager={panels} id="readout" weight={1}>
-        {#snippet actions()}
-          {#if sel}<span class="mono">{meta!.layers[rung]} → “{sel.t}”</span>{/if}
-        {/snippet}
-        <div class="readout scrollbar">
+  {#snippet pDepth()}
+    {#if sel}
+      <DepthChart
+        bits={sel.bits}
+        jbits={jMatches ? jcol!.jbits : null}
+        uniform={meta!.uniform}
+        index={rung}
+        predToken={sel.t}
+        onSeek={(i) => (rung = i)}
+      />
+    {/if}
+  {/snippet}
+
+  {#snippet aReadout()}
+    {#if sel}<span class="mono">{meta!.layers[rung]} → “{sel.t}”</span>{/if}
+  {/snippet}
+  {#snippet pReadout()}
+    <div class="readout scrollbar">
           {#if sel}
             <div class="group">
               <div class="ghead mono faint">this token, up the ladder</div>
@@ -415,7 +419,7 @@
                 p = {(sel.p * 100).toFixed(2)}% · <b style="color:var(--data)">{surp(sel).toFixed(2)}b</b>
               </div>
               <div class="ladderline mono">
-                <span class="faint">{meta.layers[rung]} says</span>
+                <span class="faint">{meta!.layers[rung]} says</span>
                 “{sel.rtop[rung]}” · {sel.bits[rung]?.toFixed(2)}b for “{sel.t}”
               </div>
             </div>
@@ -443,16 +447,16 @@
             <div class="ghead mono faint">{streaming ? 'waiting for the first token…' : 'no trace yet'}</div>
           {/if}
         </div>
-      </Panel>
+  {/snippet}
 
-      <Panel manager={panels} id="attn" weight={1}>
-        {#snippet actions()}
-          <div class="toggle-group">
-            <button class:active={shade === 'surprisal'} onclick={() => (shade = 'surprisal')}>surprisal</button>
-            <button class:active={shade === 'attention'} onclick={() => (shade = 'attention')}>attention</button>
-          </div>
-        {/snippet}
-        <div class="attnbody scrollbar">
+  {#snippet aAttn()}
+    <div class="toggle-group">
+      <button class:active={shade === 'surprisal'} onclick={() => (shade = 'surprisal')}>surprisal</button>
+      <button class:active={shade === 'attention'} onclick={() => (shade = 'attention')}>attention</button>
+    </div>
+  {/snippet}
+  {#snippet pAttn()}
+    <div class="attnbody scrollbar">
           {#if shade !== 'attention'}
             <div class="ghead mono faint">
               switch the shade to “attention” — the trace then tints by where the
@@ -502,13 +506,17 @@
             </div>
           {/if}
         </div>
-      </Panel>
+  {/snippet}
 
-      <Panel manager={panels} id="guide" weight={1}>
-        <InterpretGuide lens="reason" sections={['bits', 'ladder', 'jlens', 'attn', 'ablate', 'repro', 'small']} />
-      </Panel>
-    </div>
-  </PanelHost>
+  {#snippet pGuide()}
+    <InterpretGuide lens="reason" sections={['bits', 'ladder', 'jlens', 'attn', 'ablate', 'repro', 'small']} />
+  {/snippet}
+
+  <PanelHost
+    manager={panels}
+    snippets={{ trace: pTrace, tokbits: pTokbits, depth: pDepth, readout: pReadout, attn: pAttn, guide: pGuide }}
+    actions={{ trace: aTrace, readout: aReadout, attn: aAttn }}
+  />
 
   <TransportBar {player} note={note + (error ? ` · ${error}` : '')} />
 {:else}
@@ -523,9 +531,6 @@
   .seedinp { width: 88px; }
 
   .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
-
-  .col.main { flex: 3 1 0; }
-  .col.side { flex: 2 1 0; }
 
   .readout { display: flex; flex-direction: column; gap: 12px; overflow: auto; min-height: 0; }
   .group { display: flex; flex-direction: column; gap: 4px; }

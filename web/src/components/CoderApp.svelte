@@ -19,7 +19,6 @@
   import { router } from '../lib/router.svelte';
 
   import InterpretGuide from './InterpretGuide.svelte';
-  import Panel from './Panel.svelte';
   import PanelHost from './PanelHost.svelte';
   import TopBar from './shell/TopBar.svelte';
   import TransportBar from './shell/TransportBar.svelte';
@@ -28,14 +27,22 @@
   import BitstreamView from './coder/BitstreamView.svelte';
   import BitsChart from './coder/BitsChart.svelte';
 
-  const panels = new PanelManager('coder', [
-    { id: 'interval', title: 'Interval' },
-    { id: 'chart', title: 'Bits accumulating' },
-    { id: 'dist', title: 'Distribution' },
-    { id: 'bits', title: 'Bitstream' },
-    { id: 'explain', title: 'Readout' },
-    { id: 'guide', title: 'How to read this', collapsed: true }
-  ]);
+  const panels = new PanelManager(
+    'coder',
+    [
+      { id: 'interval', title: 'Interval' },
+      { id: 'chart', title: 'Bits accumulating' },
+      { id: 'dist', title: 'Distribution' },
+      { id: 'bits', title: 'Bitstream', zoomable: true },
+      { id: 'explain', title: 'Readout', fit: true },
+      { id: 'guide', title: 'How to read this', collapsed: true }
+    ],
+    {
+      columns: [['interval', 'chart'], ['dist', 'bits', 'explain', 'guide']],
+      widths: [1.3, 1],
+      weights: { interval: 1.4 }
+    }
+  );
 
   type Source = 'builtin' | 'grammar' | 'llm';
   type Model = 'uniform' | 'empirical';
@@ -210,50 +217,46 @@
 </TopBar>
 
 {#if cur}
-  <PanelHost manager={panels}>
-    <div class="col col-a">
-      <Panel manager={panels} id="interval" weight={1.4}>
-        {#snippet actions()}<span class="mono">{mode} · step {player.index + 1}/{player.count}</span>{/snippet}
-        <IntervalView steps={player.steps} index={player.index} {memoryless} />
-      </Panel>
+  {#snippet aInterval()}<span class="mono">{mode} · step {player.index + 1}/{player.count}</span>{/snippet}
+  {#snippet pInterval()}
+    <IntervalView steps={player.steps} index={player.index} {memoryless} />
+  {/snippet}
 
-      <Panel manager={panels} id="chart" weight={1}>
-        {#snippet actions()}<span class="mono">{idealTotal.toFixed(1)} ideal · {enc.codeword.nbits} bits</span>{/snippet}
-        <BitsChart steps={player.steps} index={player.index} refBits={enc.codeword.nbits} onSeek={(i) => player.seek(i)} />
-      </Panel>
-    </div>
+  {#snippet aChart()}<span class="mono">{idealTotal.toFixed(1)} ideal · {enc.codeword.nbits} bits</span>{/snippet}
+  {#snippet pChart()}
+    <BitsChart steps={player.steps} index={player.index} refBits={enc.codeword.nbits} onSeek={(i) => player.seek(i)} />
+  {/snippet}
 
-    <div class="col col-b">
-      <Panel manager={panels} id="dist" weight={1}>
-        {#snippet actions()}<span class="mono">{cur.dist.length} symbols</span>{/snippet}
-        <DistView step={cur} />
-      </Panel>
+  {#snippet aDist()}<span class="mono">{cur!.dist.length} symbols</span>{/snippet}
+  {#snippet pDist()}
+    <DistView step={cur!} />
+  {/snippet}
 
-      <Panel manager={panels} id="bits" weight={1}>
-        {#snippet actions()}<span class="mono">{cur.bitsSoFar.toFixed(2)} bits</span>{/snippet}
-        <BitstreamView step={cur} codeword={enc.codeword} {idealTotal} final={atEnd} />
-      </Panel>
+  {#snippet aBits()}<span class="mono">{cur!.bitsSoFar.toFixed(2)} bits</span>{/snippet}
+  {#snippet pBits()}
+    <BitstreamView step={cur!} codeword={enc.codeword} {idealTotal} final={atEnd} />
+  {/snippet}
 
-      <Panel manager={panels} id="explain" fit>
-        <div class="readout">
+  {#snippet pExplain()}
+    <div class="readout">
           {#if mode === 'encode'}
             <p class="say">
               Encoding <span class="mono">“{subject}”</span>: each symbol narrows the
               interval by its probability, adding <b>−log₂p</b> bits.
               {#if atEnd}
                 Done — the message lives in
-                <span class="mono">[{cur.newLo.toFixed(5)}, {cur.newHi.toFixed(5)})</span>,
+                <span class="mono">[{cur!.newLo.toFixed(5)}, {cur!.newHi.toFixed(5)})</span>,
                 named by <b class="mono" style="color:var(--total)">0.{enc.codeword.bits}</b>
                 (<b>{enc.codeword.nbits}</b> bits vs. ideal <b>{idealTotal.toFixed(2)}</b>).
               {:else}
-                So far <b>{cur.bitsSoFar.toFixed(2)}</b> bits.
+                So far <b>{cur!.bitsSoFar.toFixed(2)}</b> bits.
               {/if}
             </p>
           {:else}
             <p class="say">
               Decoding the single number <b class="mono" style="color:var(--chosen)">{enc.codeword.value.toFixed(5)}</b>:
               at each step we find which slice it lands in, emit that symbol, and zoom in.
-              Recovered so far: <span class="mono">“{cur.emitted.join('')}”</span>
+              Recovered so far: <span class="mono">“{cur!.emitted.join('')}”</span>
               {#if atEnd}<span class="good"> — full round-trip ✓</span>{/if}
             </p>
           {/if}
@@ -262,13 +265,17 @@
             exactly why MDL charges L(M): the model has to be transmitted too.
           </p>
         </div>
-      </Panel>
+  {/snippet}
 
-      <Panel manager={panels} id="guide" weight={1}>
-        <InterpretGuide lens="coder" sections={['coderread']} />
-      </Panel>
-    </div>
-  </PanelHost>
+  {#snippet pGuide()}
+    <InterpretGuide lens="coder" sections={['coderread']} />
+  {/snippet}
+
+  <PanelHost
+    manager={panels}
+    snippets={{ interval: pInterval, chart: pChart, dist: pDist, bits: pBits, explain: pExplain, guide: pGuide }}
+    actions={{ interval: aInterval, chart: aChart, dist: aDist, bits: aBits }}
+  />
 
   <TransportBar {player} {note} converged={atEnd} />
 {:else}
@@ -280,9 +287,6 @@
 <style>
   .s-input { width: 160px; font-size: 12px; padding: 5px 8px; }
   .train input[type='range'] { width: 120px; accent-color: var(--model); }
-
-  .col-a { flex: 1.3 1 0; }
-  .col-b { flex: 1 1 0; }
 
   .readout { display: flex; flex-direction: column; gap: 6px; }
   .say { margin: 0; font-size: 12.5px; line-height: 1.45; }
