@@ -17,11 +17,35 @@ export interface TopTok {
   p: number;
 }
 
+/** What the engine knows about one servable model. `models` stays a plain
+ * string list on the wire (the TUI reads it); `model_info` is the richer
+ * per-model metadata newer engines add — merged here into one shape. */
+export interface ModelInfo {
+  name: string;
+  kind: 'hub' | 'local';
+  /** For local checkpoints: the note train.py saved alongside the weights. */
+  note?: string;
+  /** Positional budget (prompt + rollout tokens) — tiny for local models. */
+  n_positions?: number;
+  /** Sample prompts that actually fit this model's vocab/positions. */
+  prompts?: string[];
+}
+
 export interface EngineHealth {
   ok: boolean;
   device: string;
   loaded: string[];
+  models: ModelInfo[];
+  default: string;
+}
+
+interface RawHealth {
+  ok: boolean;
+  device: string;
+  loaded: string[];
   models: string[];
+  default?: string;
+  model_info?: Record<string, Omit<ModelInfo, 'name' | 'kind'> & { kind?: 'hub' | 'local' }>;
 }
 
 export interface LensResponse {
@@ -64,7 +88,18 @@ export interface ColumnResponse {
 export async function fetchHealth(): Promise<EngineHealth> {
   const res = await fetch(`${ENGINE_URL}/health`);
   if (!res.ok) throw new Error(`engine ${res.status}`);
-  return res.json();
+  const raw = (await res.json()) as RawHealth;
+  return {
+    ok: raw.ok,
+    device: raw.device,
+    loaded: raw.loaded,
+    default: raw.default ?? raw.models[0] ?? 'gpt2',
+    models: raw.models.map((name) => ({
+      name,
+      kind: name.startsWith('local/') ? 'local' : 'hub',
+      ...(raw.model_info?.[name] ?? {})
+    }))
+  };
 }
 
 export async function fetchLens(req: {
@@ -170,6 +205,89 @@ export async function streamChat(
     for (const frame of frames) {
       for (const line of frame.split('\n')) {
         if (line.startsWith('data: ')) onEvent(JSON.parse(line.slice(6)) as ReasonEvent);
+      }
+    }
+  }
+}
+
+/** /train stream events — the Train·real lens's live feed. */
+export interface TrainStart {
+  event: 'start';
+  params_m: number;
+  device: string;
+  epochs: number;
+  n_train: number;
+  n_test: number;
+}
+export interface TrainBatch {
+  event: 'batch';
+  epoch: number;
+  /** Fraction of this epoch's batches done. */
+  frac: number;
+  loss: number;
+}
+export interface TrainEpoch {
+  event: 'epoch';
+  epoch: number;
+  loss: number;
+  /** Held-out exact-match over all 3 answer digits. */
+  acc: number;
+}
+export interface TrainCheckpoint {
+  event: 'checkpoint';
+  /** Directory name — served by the engine as `local/<name>`. */
+  name: string;
+  note: string;
+}
+export interface TrainDone {
+  event: 'done';
+  acc: number;
+  epochs_run: number;
+}
+export interface TrainError {
+  event: 'error';
+  detail: string;
+}
+export type TrainEvent =
+  | TrainStart
+  | TrainBatch
+  | TrainEpoch
+  | TrainCheckpoint
+  | TrainDone
+  | TrainError;
+
+/**
+ * POST /train and parse the SSE stream. One run at a time — the engine answers
+ * 409 if a training run is already in progress. Aborting the fetch stops
+ * training at the next batch; checkpoints already saved stay on disk.
+ */
+export async function streamTrain(
+  req: { epochs?: number },
+  onEvent: (ev: TrainEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const res = await fetch(`${ENGINE_URL}/train`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+    signal
+  });
+  if (!res.ok || !res.body) {
+    const detail = await res.json().then((j) => j.detail ?? res.statusText).catch(() => res.statusText);
+    throw new Error(String(detail));
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const frames = buf.split('\n\n');
+    buf = frames.pop() ?? '';
+    for (const frame of frames) {
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('data: ')) onEvent(JSON.parse(line.slice(6)) as TrainEvent);
       }
     }
   }

@@ -97,6 +97,26 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 .toggle-group button { border: none; border-radius: 0; background: transparent; padding: 5px 11px; }
 .toggle-group button.active { background: var(--model); color: #06121f; font-weight: 600; }
 
+/* Topbar control vocabulary — global so every lens's controls look identical
+   (the markup lives in each lens, rendered inside the shared TopBar). */
+.f { display: flex; align-items: center; gap: 6px; }
+.lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.cb { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); white-space: nowrap; cursor: pointer; }
+.cb input { accent-color: var(--model); }
+.formula { font-size: 12px; white-space: nowrap; }
+.formula b { font-weight: 700; }
+.data-input { flex: 1; min-width: 160px; font-size: 12px; padding: 5px 8px; }
+.chars { font-size: 11px; white-space: nowrap; }
+.spacer { flex: 1 1 auto; }
+.hint { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.warn { font-size: 11px; color: var(--chosen); white-space: nowrap; }
+.warn.bad { color: var(--bad); }
+.status { font-size: 10.5px; color: var(--good); white-space: nowrap; }
+.status.off { color: var(--bad); }
+
+/* Panel-column skeleton shared by every lens layout. */
+.col { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0; }
+
 .scrollbar::-webkit-scrollbar { height: 8px; width: 8px; }
 .scrollbar::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
 .scrollbar::-webkit-scrollbar-track { background: transparent; }

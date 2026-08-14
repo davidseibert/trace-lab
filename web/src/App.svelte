@@ -1,4 +1,16 @@
 <script lang="ts">
+  /**
+   * The shell: NavBar (registry-driven, grouped by kind) + whatever the hash
+   * routes to. Lens metadata lives in lib/lenses.ts; this file only maps ids
+   * to components, so the registry stays free of component imports (and thus
+   * of import cycles — components import the registry for titles/links).
+   */
+  import type { Component } from 'svelte';
+  import { router } from './lib/router.svelte';
+  import { lensById } from './lib/lenses';
+
+  import NavBar from './components/shell/NavBar.svelte';
+  import IndexPage from './components/shell/IndexPage.svelte';
   import GrammarApp from './components/GrammarApp.svelte';
   import MorphApp from './components/MorphApp.svelte';
   import MorfessorApp from './components/MorfessorApp.svelte';
@@ -8,49 +20,34 @@
   import LogitApp from './components/LogitApp.svelte';
   import ReasonApp from './components/ReasonApp.svelte';
   import AttentionLabApp from './components/attn/AttentionLabApp.svelte';
+  import TrainApp from './components/train/TrainApp.svelte';
 
-  type Lens = 'grammar' | 'morph' | 'morfessor' | 'llm' | 'attn' | 'graph' | 'coder' | 'logit' | 'reason';
-  let lens = $state<Lens>('grammar');
+  const COMPONENTS: Record<string, Component> = {
+    grammar: GrammarApp,
+    morph: MorphApp,
+    morfessor: MorfessorApp,
+    llm: LlmApp,
+    attn: AttentionLabApp,
+    graph: GraphApp,
+    coder: CoderApp,
+    logit: LogitApp,
+    reason: ReasonApp,
+    train: TrainApp
+  };
+
+  // Unknown paths fall through to the index rather than a 404 — this is a
+  // sandbox, not a site.
+  const Active = $derived(lensById(router.path) ? COMPONENTS[router.path] : null);
 </script>
 
-<!-- Shared identity + lens switcher, handed to whichever lens is active so the
-     whole app keeps a single top bar. -->
-{#snippet brand()}
-  <div class="brand">
-    <span class="wordmark mono">trace<span class="dim">·lab</span></span>
-    <div class="toggle-group lens-switch">
-      <button class:active={lens === 'grammar'} onclick={() => (lens = 'grammar')}>MDL Grammar</button>
-      <button class:active={lens === 'morph'} onclick={() => (lens = 'morph')}>Morph·merge</button>
-      <button class:active={lens === 'morfessor'} onclick={() => (lens = 'morfessor')}>Morph·split</button>
-      <button class:active={lens === 'llm'} onclick={() => (lens = 'llm')}>Mini-GPT</button>
-      <button class:active={lens === 'attn'} onclick={() => (lens = 'attn')}>Attention Lab</button>
-      <button class:active={lens === 'graph'} onclick={() => (lens = 'graph')}>Graph·SUBDUE</button>
-      <button class:active={lens === 'coder'} onclick={() => (lens = 'coder')}>Coder</button>
-      <button class:active={lens === 'logit'} onclick={() => (lens = 'logit')}>Logit·real</button>
-      <button class:active={lens === 'reason'} onclick={() => (lens = 'reason')}>Reason·trace</button>
-    </div>
-  </div>
-{/snippet}
-
 <div class="app">
-  {#if lens === 'grammar'}
-    <GrammarApp {brand} />
-  {:else if lens === 'morph'}
-    <MorphApp {brand} />
-  {:else if lens === 'morfessor'}
-    <MorfessorApp {brand} />
-  {:else if lens === 'llm'}
-    <LlmApp {brand} />
-  {:else if lens === 'attn'}
-    <AttentionLabApp {brand} />
-  {:else if lens === 'graph'}
-    <GraphApp {brand} />
-  {:else if lens === 'logit'}
-    <LogitApp {brand} />
-  {:else if lens === 'reason'}
-    <ReasonApp {brand} />
+  <NavBar />
+  {#if Active}
+    {#key `${router.path}@${router.epoch}`}
+      <Active />
+    {/key}
   {:else}
-    <CoderApp {brand} />
+    <IndexPage />
   {/if}
 </div>
 
@@ -64,9 +61,4 @@
     flex-direction: column;
     gap: 8px;
   }
-
-  .brand { display: flex; align-items: center; gap: 10px; }
-  .wordmark { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; }
-  .wordmark .dim { color: var(--faint); font-weight: 500; }
-  .lens-switch button { padding: 4px 10px; font-size: 12px; white-space: nowrap; }
 </style>

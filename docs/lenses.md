@@ -382,7 +382,15 @@ fixing the classic lens's garbage embed rung (≈51 bits naive → ≈11 transpo
 Qwen's mid-stack staying near-illegible to the classic lens while the J-lens
 reads the answer many layers earlier — the faithfulness gap, in bits.
 
-### Train your own model into the lens
+### Train your own model into the lens (Train·real)
+
+This process has its own lens: **Train·real** streams the run from the
+engine's SSE `/train` endpoint — loss and held-out exact-match per epoch,
+checkpoints announced as they land, each linking straight into Logit·real with
+a prompt that fits the tiny model. Every checkpoint also carries a
+`lens_meta.json` (note + sample prompts), which `/health` surfaces so the
+model pickers can label the `local/*` entries instead of listing bare names.
+`make train` remains the headless equivalent of the same run:
 
 `make train` trains a 1.2M-param GPT-2 (real `transformers`, 6 layers) on the
 tinygrad-style **two-digit addition** task — every `"a+b="` as one character

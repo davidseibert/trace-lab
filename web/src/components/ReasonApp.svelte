@@ -1,12 +1,10 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte';
   import { Player } from '../lib/player.svelte';
   import { PanelManager } from '../lib/panels/panels.svelte';
   import {
     fetchAblate,
     fetchAttn,
     fetchColumn,
-    fetchHealth,
     streamChat,
     type AblateResponse,
     type AttnResponse,
@@ -14,16 +12,18 @@
     type ReasonMeta,
     type ReasonTok
   } from '../lib/logit/api';
+  import { engine } from '../lib/logit/engine.svelte';
+  import { router } from '../lib/router.svelte';
 
-  import Controls from './Controls.svelte';
   import InterpretGuide from './InterpretGuide.svelte';
   import Panel from './Panel.svelte';
   import PanelHost from './PanelHost.svelte';
+  import TopBar from './shell/TopBar.svelte';
+  import TransportBar from './shell/TransportBar.svelte';
+  import EngineOffline from './shell/EngineOffline.svelte';
   import DepthChart from './logit/DepthChart.svelte';
   import TraceView from './reason/TraceView.svelte';
   import TokenBitsStrip from './reason/TokenBitsStrip.svelte';
-
-  let { brand }: { brand: Snippet } = $props();
 
   const panels = new PanelManager('reason', [
     { id: 'trace', title: 'Reasoning trace' },
@@ -38,17 +38,29 @@
   // Logit·real scrubs rungs): playing replays the trace being generated.
   const player = new Player<ReasonTok>();
 
-  let modelName = $state('Qwen/Qwen3-0.6B');
-  let models = $state<string[]>(['Qwen/Qwen3-0.6B']);
-  let prompt = $state('What is 17 * 24? Answer with just the number.');
-  let thinking = $state(true);
-  let budget = $state(512);
+  const DEFAULT_PROMPT = 'What is 17 * 24? Answer with just the number.';
+  let modelName = $state(router.get('m') ?? 'Qwen/Qwen3-0.6B');
+  let prompt = $state(router.get('p') ?? DEFAULT_PROMPT);
+  let thinking = $state(router.bool('think') ?? true);
+  let budget = $state(router.num('budget') ?? 512);
   // Qwen's recommended thinking-mode temperature; 0 = greedy. The engine
   // seeds every sampled run and echoes the seed, so any run can be replayed.
-  let temperature = $state(0.6);
-  let seed = $state<number | null>(null);
+  let temperature = $state(router.num('temp') ?? 0.6);
+  let seed = $state<number | null>(router.num('seed'));
 
-  let device = $state<string | null>(null);
+  // Settings — seed and temperature included — live in the URL, so a refresh
+  // keeps them and a copied link replays the run.
+  $effect(() => {
+    router.setQuery({
+      m: modelName === 'Qwen/Qwen3-0.6B' ? null : modelName,
+      p: prompt === DEFAULT_PROMPT ? null : prompt,
+      think: thinking ? null : false,
+      budget: budget === 512 ? null : budget,
+      temp: temperature === 0.6 ? null : temperature,
+      seed: seed !== null && !Number.isNaN(seed) ? seed : null
+    });
+  });
+
   let streaming = $state(false);
   let error = $state('');
   let meta = $state<ReasonMeta | null>(null);
@@ -56,19 +68,8 @@
   let rung = $state(0); // depth cursor within the selected column
   let abort: AbortController | null = null;
 
-  async function checkHealth() {
-    try {
-      const h = await fetchHealth();
-      device = h.device;
-      models = h.models;
-      return true;
-    } catch {
-      device = null;
-      return false;
-    }
-  }
   $effect(() => {
-    void checkHealth();
+    void engine.check();
   });
 
   async function run() {
@@ -106,11 +107,11 @@
         },
         abort.signal
       );
-      device = device ?? 'up';
+      engine.markUp();
     } catch (e) {
       if (!(e instanceof DOMException && e.name === 'AbortError')) {
         error = e instanceof Error ? e.message : String(e);
-        await checkHealth();
+        await engine.check();
       }
     } finally {
       streaming = false;
@@ -120,6 +121,29 @@
 
   function stop() {
     abort?.abort();
+  }
+
+  // A finished sampled run is replayable via seed + temp; this builds the URL
+  // that pins them (the seed the engine actually used, even when auto).
+  let copied = $state(false);
+  async function copyRunLink() {
+    if (!meta) return;
+    const q = new URLSearchParams();
+    if (modelName !== 'Qwen/Qwen3-0.6B') q.set('m', modelName);
+    if (prompt !== DEFAULT_PROMPT) q.set('p', prompt);
+    if (!thinking) q.set('think', '0');
+    if (budget !== 512) q.set('budget', String(budget));
+    if (meta.temperature !== 0.6) q.set('temp', String(meta.temperature));
+    if (meta.seed !== null) q.set('seed', String(meta.seed));
+    const qs = q.toString();
+    const url = `${location.origin}${location.pathname}#/reason${qs ? `?${qs}` : ''}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      copied = true;
+      setTimeout(() => (copied = false), 1500);
+    } catch {
+      error = 'clipboard blocked — copy the address bar instead';
+    }
   }
 
   const sel = $derived(player.current ?? null);
@@ -278,9 +302,7 @@
   );
 </script>
 
-<div class="topbar panel">
-  {@render brand()}
-
+<TopBar {panels}>
   <span class="formula mono" title="per-token code length of a reasoning trace — thinking buys the answer down">
     <b style="color:var(--data)">−log₂ p</b> · reasoning
   </span>
@@ -288,7 +310,10 @@
   <label class="f">
     <span class="lbl">model</span>
     <select bind:value={modelName}>
-      {#each models as m (m)}<option value={m}>{m}</option>{/each}
+      {#each engine.models as m (m.name)}<option value={m.name}>{m.name}</option>{/each}
+      {#if !engine.models.some((m) => m.name === modelName)}
+        <option value={modelName}>{modelName}</option>
+      {/if}
     </select>
   </label>
 
@@ -323,27 +348,22 @@
   {#if streaming}
     <button class="primary" onclick={stop}>stop ■</button>
   {:else}
-    <button class="primary" onclick={run} disabled={device === null}>run ▸</button>
+    <button class="primary" onclick={run} disabled={!engine.up}>run ▸</button>
   {/if}
 
-  <span class="status mono" class:off={device === null} title="engine service (engine/, port 5181)">
-    {device === null ? 'engine offline' : `engine · ${device}`}
+  {#if meta && !streaming}
+    <button class="ghost" onclick={copyRunLink} title="Copy a URL that replays this exact run (seed + temperature pinned)">
+      {copied ? '✓ copied' : '⎘ run link'}
+    </button>
+  {/if}
+
+  <span class="status mono" class:off={!engine.up} title="engine service (engine/, port 5181)">
+    {engine.up ? `engine · ${engine.device}` : 'engine offline'}
   </span>
+</TopBar>
 
-  {#if panels.isDirty}
-    <button class="ghost reset-layout" onclick={() => panels.reset()} title="Reset panel layout">⤢ reset</button>
-  {/if}
-</div>
-
-{#if device === null && !meta}
-  <div class="panel empty">
-    <p class="mono">engine offline</p>
-    <p class="faint">This lens streams a reasoning model through a local engine service. Start it:</p>
-    <pre class="mono">make up</pre>
-    <p class="faint">
-      then <button class="ghost" onclick={() => checkHealth()}>retry</button>
-    </p>
-  </div>
+{#if !engine.up && !meta}
+  <EngineOffline what="This lens streams a reasoning model through the local engine service." />
 {:else if meta}
   <PanelHost manager={panels}>
     <div class="col main">
@@ -485,15 +505,12 @@
       </Panel>
 
       <Panel manager={panels} id="guide" weight={1}>
-        <InterpretGuide sections={['bits', 'ladder', 'jlens', 'attn', 'ablate', 'repro', 'small']} />
+        <InterpretGuide lens="reason" sections={['bits', 'ladder', 'jlens', 'attn', 'ablate', 'repro', 'small']} />
       </Panel>
     </div>
   </PanelHost>
 
-  <div class="panel transport-panel">
-    <Controls {player} />
-    <div class="note mono" title={note}>{note}{error ? ` · ${error}` : ''}</div>
-  </div>
+  <TransportBar {player} note={note + (error ? ` · ${error}` : '')} />
 {:else}
   <div class="panel empty">
     <p class="mono faint">{streaming ? 'generating…' : error || 'ask a question and press run — thinking traces stream in live'}</p>
@@ -501,22 +518,12 @@
 {/if}
 
 <style>
-  .topbar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; flex-wrap: wrap; }
-  .formula { font-size: 12px; white-space: nowrap; }
-  .f { display: flex; align-items: center; gap: 6px; }
-  .lbl { font-size: 11px; color: var(--muted); }
-  .data-input { flex: 1; min-width: 200px; }
-  .cb { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); white-space: nowrap; }
   .budget { width: 64px; }
   .temp { width: 52px; }
   .seedinp { width: 88px; }
-  .status { font-size: 10.5px; color: var(--ok, #4dc07d); white-space: nowrap; }
-  .status.off { color: var(--bad, #e5484d); }
 
   .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
-  .empty pre { background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 6px; padding: 10px 14px; font-size: 12px; }
 
-  .col { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0; }
   .col.main { flex: 3 1 0; }
   .col.side { flex: 2 1 0; }
 
@@ -547,7 +554,4 @@
   }
   .hcell:hover { outline: 1px solid var(--muted); }
   .hcell.hsel { outline: 2px solid var(--data); }
-
-  .transport-panel { display: flex; align-items: center; gap: 16px; padding: 8px 12px; }
-  .note { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

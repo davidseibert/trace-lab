@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack, type Snippet } from 'svelte';
+  import { untrack } from 'svelte';
   import { Player } from '../lib/player.svelte';
   import { PanelManager } from '../lib/panels/panels.svelte';
   import {
@@ -16,23 +16,25 @@
   import { trace } from '../lib/mdl/engine';
   import { trainTrace, makeForward } from '../lib/llm/trainTrace';
   import { DATASETS, DATASET_KEYS } from '../lib/llm/datasets';
+  import { router } from '../lib/router.svelte';
 
-  import Controls from './Controls.svelte';
+  import InterpretGuide from './InterpretGuide.svelte';
   import Panel from './Panel.svelte';
   import PanelHost from './PanelHost.svelte';
+  import TopBar from './shell/TopBar.svelte';
+  import TransportBar from './shell/TransportBar.svelte';
   import IntervalView from './coder/IntervalView.svelte';
   import DistView from './coder/DistView.svelte';
   import BitstreamView from './coder/BitstreamView.svelte';
   import BitsChart from './coder/BitsChart.svelte';
-
-  let { brand }: { brand: Snippet } = $props();
 
   const panels = new PanelManager('coder', [
     { id: 'interval', title: 'Interval' },
     { id: 'chart', title: 'Bits accumulating' },
     { id: 'dist', title: 'Distribution' },
     { id: 'bits', title: 'Bitstream' },
-    { id: 'explain', title: 'Readout' }
+    { id: 'explain', title: 'Readout' },
+    { id: 'guide', title: 'How to read this', collapsed: true }
   ]);
 
   type Source = 'builtin' | 'grammar' | 'llm';
@@ -41,15 +43,32 @@
 
   const STEPS = 300;
 
-  let raw = $state('abracadabra');
-  let source = $state<Source>('builtin');
-  let model = $state<Model>('empirical');
-  let mode = $state<Mode>('encode');
+  const srcParam = router.get('src');
+  const modelParam = router.get('model');
+  let raw = $state(router.get('s') ?? 'abracadabra');
+  let source = $state<Source>(
+    srcParam === 'grammar' || srcParam === 'llm' ? srcParam : 'builtin'
+  );
+  let model = $state<Model>(modelParam === 'uniform' ? 'uniform' : 'empirical');
+  let mode = $state<Mode>(router.get('phase') === 'decode' ? 'decode' : 'encode');
 
   // Mini-GPT source controls.
-  let llmKey = $state(DATASET_KEYS[0]);
-  let llmSeqIdx = $state(0);
-  let llmStep = $state(STEPS - 1); // default: the fully-trained model
+  const dsParam = router.get('ds');
+  let llmKey = $state(dsParam && DATASETS[dsParam] ? dsParam : DATASET_KEYS[0]);
+  let llmSeqIdx = $state(router.num('seq') ?? 0);
+  let llmStep = $state(router.num('tstep') ?? STEPS - 1); // default: fully trained
+
+  $effect(() => {
+    router.setQuery({
+      src: source === 'builtin' ? null : source,
+      s: source === 'llm' || raw === 'abracadabra' ? null : raw,
+      model: source !== 'builtin' || model === 'empirical' ? null : model,
+      phase: mode === 'encode' ? null : mode,
+      ds: source === 'llm' && llmKey !== DATASET_KEYS[0] ? llmKey : null,
+      seq: source === 'llm' && llmSeqIdx !== 0 ? llmSeqIdx : null,
+      tstep: source === 'llm' && llmStepClamped !== STEPS - 1 ? llmStepClamped : null
+    });
+  });
 
   const player = new Player<CoderStep>();
 
@@ -123,15 +142,13 @@
   const memoryless = $derived(source !== 'llm');
 </script>
 
-<div class="topbar panel">
-  {@render brand()}
-
+<TopBar {panels}>
   <div class="f">
     <span class="lbl">source</span>
     <div class="toggle-group">
       <button class:active={source === 'builtin'} onclick={() => (source = 'builtin')}>Built-in</button>
       <button class:active={source === 'grammar'} onclick={() => (source = 'grammar')}>Grammar</button>
-      <button class:active={source === 'llm'} onclick={() => (source = 'llm')}>Mini-GPT</button>
+      <button class:active={source === 'llm'} onclick={() => (source = 'llm')}>Mini·GPT</button>
     </div>
   </div>
 
@@ -190,11 +207,7 @@
   {#if !roundTripOk}
     <span class="warn bad mono">round-trip mismatch</span>
   {/if}
-
-  {#if panels.isDirty}
-    <button class="ghost reset-layout" onclick={() => panels.reset()} title="Reset panel layout">⤢ reset</button>
-  {/if}
-</div>
+</TopBar>
 
 {#if cur}
   <PanelHost manager={panels}>
@@ -250,13 +263,14 @@
           </p>
         </div>
       </Panel>
+
+      <Panel manager={panels} id="guide" weight={1}>
+        <InterpretGuide lens="coder" sections={['coderread']} />
+      </Panel>
     </div>
   </PanelHost>
 
-  <div class="panel transport-panel">
-    <Controls {player} />
-    <div class="note mono" class:converged={atEnd} title={note}>{note}</div>
-  </div>
+  <TransportBar {player} {note} converged={atEnd} />
 {:else}
   <div class="panel empty">
     <p class="muted">Type a short string to encode.</p>
@@ -264,26 +278,9 @@
 {/if}
 
 <style>
-  .topbar {
-    display: flex;
-    flex: 0 0 auto;
-    flex-direction: row;
-    align-items: center;
-    gap: 12px;
-    padding: 7px 12px;
-    flex-wrap: wrap;
-  }
-  .f { display: flex; align-items: center; gap: 6px; }
-  .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
   .s-input { width: 160px; font-size: 12px; padding: 5px 8px; }
   .train input[type='range'] { width: 120px; accent-color: var(--model); }
-  .hint { font-size: 11px; color: var(--muted); white-space: nowrap; }
-  .warn { font-size: 11px; color: var(--chosen); white-space: nowrap; }
-  .warn.bad { color: var(--bad); }
-  .spacer { flex: 1 1 auto; }
-  .reset-layout { padding: 4px 9px; font-size: 11px; white-space: nowrap; }
 
-  .col { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0; }
   .col-a { flex: 1.3 1 0; }
   .col-b { flex: 1 1 0; }
 
@@ -291,20 +288,4 @@
   .say { margin: 0; font-size: 12.5px; line-height: 1.45; }
 
   .empty { flex: 1 1 auto; display: grid; place-items: center; }
-
-  .transport-panel {
-    display: flex;
-    flex: 0 0 auto;
-    flex-direction: row;
-    align-items: center;
-    gap: 16px;
-    padding: 7px 12px;
-  }
-  .note {
-    flex: 1; min-width: 0;
-    font-size: 12px; color: var(--muted);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    text-align: right;
-  }
-  .note.converged { color: var(--good); }
 </style>

@@ -14,6 +14,7 @@ from __future__ import annotations
 import gc
 import os
 import re
+import threading
 from collections import OrderedDict
 from dataclasses import asdict
 from pathlib import Path
@@ -59,6 +60,37 @@ def local_models() -> list[str]:
     if not LOCAL_DIR.is_dir():
         return []
     return sorted(f"local/{p.name}" for p in LOCAL_DIR.iterdir() if (p / "config.json").is_file())
+
+
+def _local_meta(dirname: str) -> dict:
+    """Self-description for a local checkpoint: the note + sample prompts that
+    train.py saved (lens_meta.json), plus the positional budget from
+    config.json — so the UI can label the picker entry and swap in a prompt
+    that actually fits instead of overflowing 16 positions with Eiffel."""
+    d = LOCAL_DIR / dirname
+    meta: dict = {}
+    try:
+        meta = json.loads((d / "lens_meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    if "n_positions" not in meta:
+        try:
+            cfg = json.loads((d / "config.json").read_text(encoding="utf-8"))
+            n_pos = cfg.get("n_positions") or cfg.get("max_position_embeddings")
+            if n_pos:
+                meta["n_positions"] = n_pos
+        except (OSError, ValueError):
+            pass
+    return meta
+
+
+def model_info() -> dict:
+    """Per-model metadata for /health. `models` stays a flat list (the TUI
+    reads it); richer clients merge this in by name."""
+    info = {m: {"kind": "hub"} for m in ALLOWED_MODELS}
+    for name in local_models():
+        info[name] = {"kind": "local", **_local_meta(name.split("/", 1)[1])}
+    return info
 
 
 def _resolve(model_name: str) -> str:
@@ -176,6 +208,7 @@ def health():
         "loaded": list(_cache),
         "models": ALLOWED_MODELS + local_models(),
         "default": DEFAULT,
+        "model_info": model_info(),
     }
 
 
@@ -228,6 +261,42 @@ def chat(req: ChatRequest):
             yield f"data: {json.dumps({'event': 'error', 'detail': str(e)})}\n\n"
         except RuntimeError as e:
             yield f"data: {json.dumps({'event': 'error', 'detail': str(e)})}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache"})
+
+
+class TrainRequest(BaseModel):
+    epochs: int = Field(default=40, ge=1, le=200)
+
+
+# One training run at a time — the checkpoints are shared mutable state.
+_train_lock = threading.Lock()
+
+
+@app.post("/train")
+def train_endpoint(req: TrainRequest):
+    """Stream the tiny-addition training run (train.py) as SSE — the Train·real
+    lens's live feed. Checkpoints land in LOCAL_DIR and show up in /health on
+    the next call; the model cache drops its local/ entries afterwards so a
+    re-trained checkpoint is re-loaded, not served stale."""
+    if not _train_lock.acquire(blocking=False):
+        raise HTTPException(409, "a training run is already in progress")
+
+    def gen():
+        try:
+            from train import train_run
+
+            for ev in train_run(epochs=req.epochs, out=LOCAL_DIR):
+                yield f"data: {json.dumps(ev)}\n\n"
+        except Exception as e:  # surfaced in-stream; SSE can't change status
+            yield f"data: {json.dumps({'event': 'error', 'detail': str(e)})}\n\n"
+        finally:
+            for k in list(_cache):
+                if k.startswith("local/"):
+                    _cache.pop(k, None)
+            _free_vram()
+            _train_lock.release()
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache"})

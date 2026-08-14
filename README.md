@@ -21,7 +21,12 @@ The same lens payload drives two clients — pick your habitat:
 
 - **web/** — a Svelte sandbox: every lens, with a shared transport (play, step,
   scrub) over an immutable trace. Runs standalone for everything except the
-  real-model lens.
+  real-model lenses. Hash-routed: `#/` is a card index grouped into three
+  tiers — **instruments** (open-ended workbenches over real models, engine
+  required), **toy models** (hand-sized neural nets), and **concepts** (closed
+  theory exhibits) — and each lens keeps its settings (prompt, seed,
+  temperature, toggles) in its URL, so a refresh keeps your state and a copied
+  link is a reproduction recipe.
 - **tui/** — an [OpenTUI](https://github.com/anomalyco/opentui) terminal
   front-end for the real-model logit lens / J-lens. A native-terminal grid of
   per-layer predictions, shaded by confidence.
@@ -63,6 +68,7 @@ Each is a way to write, read, or account for structure in bits. See
 | **Attention Lab** | hand-sized, editable Q/K/V matrices | watch scaled dot-product attention compute, one clickable cell at a time |
 | **Logit·real** | GPT-2 / Qwen | the classic logit lens + J-lens over a real model, in bits |
 | **Reason·trace** | Qwen3-0.6B thinking traces | stream a reasoning trace live, per-token bits ladder as it's born — reasoning as compression |
+| **Train·real** | the tiny addition GPT-2 | train it live on the engine (same run as `make train`); the checkpoints land in Logit·real's model picker |
 
 ## Architecture
 
@@ -71,12 +77,15 @@ come for free.
 
 | path | role |
 |------|------|
+| `web/src/lib/lenses.ts` | the lens registry — id, tier, blurb, cross-links; nav, router, and index all read it |
+| `web/src/lib/router.svelte.ts` | hash router + settings-in-URL sync (`#/<lens>?…`) |
+| `web/src/lib/guides.ts` | the ✓/✗ "How to read this" content every lens mounts |
 | `web/src/lib/mdl/` | domain-agnostic MDL contracts + the greedy `trace()` runner |
 | `web/src/lib/*/` | per-lens adapters (grammar, morphology, graph, coder, llm) |
 | `web/src/lib/player.svelte.ts` | playback: an index into the immutable trace |
 | `web/src/components/` | shared transport + cost/candidate panels, plus per-lens views |
 | `engine/lens.py` | the real-model logit lens + J-lens (plain `transformers`) |
-| `engine/main.py` | the FastAPI service (`/health`, `/lens`, `/column`, SSE `/chat`, `/attn`, `/ablate`) |
+| `engine/main.py` | the FastAPI service (`/health`, `/lens`, `/column`, SSE `/chat`, `/attn`, `/ablate`, SSE `/train`) |
 | `tui/src/` | the OpenTUI front-end (talks to the engine over HTTP) |
 | `tui/src/spectate.ts` | read-only sidecar in the TUI: `/state` + `/screen` on :5182 |
 | `mcp/server.ts` | MCP bridge — lets Claude Code spectate the TUI + query the engine |

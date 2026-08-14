@@ -1,23 +1,23 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte';
   import { Player } from '../lib/player.svelte';
   import { PanelManager } from '../lib/panels/panels.svelte';
   import {
     fetchColumn,
-    fetchHealth,
     fetchLens,
     type ColumnResponse,
     type LensResponse
   } from '../lib/logit/api';
+  import { engine } from '../lib/logit/engine.svelte';
+  import { router } from '../lib/router.svelte';
 
-  import Controls from './Controls.svelte';
   import InterpretGuide from './InterpretGuide.svelte';
   import Panel from './Panel.svelte';
   import PanelHost from './PanelHost.svelte';
+  import TopBar from './shell/TopBar.svelte';
+  import TransportBar from './shell/TransportBar.svelte';
+  import EngineOffline from './shell/EngineOffline.svelte';
   import LayerGrid from './logit/LayerGrid.svelte';
   import DepthChart from './logit/DepthChart.svelte';
-
-  let { brand }: { brand: Snippet } = $props();
 
   const panels = new PanelManager('logit', [
     { id: 'grid', title: 'Lens grid' },
@@ -30,31 +30,46 @@
   // is DEPTH, not training time — steps are residual-stream rungs.
   const player = new Player<number>();
 
-  let modelName = $state('gpt2');
-  let models = $state<string[]>(['gpt2', 'gpt2-medium', 'gpt2-large', 'Qwen/Qwen2.5-0.5B']);
-  let prompt = $state('The Eiffel Tower is in the city of');
-  let jlens = $state(true);
-  let rollout = $state(0);
+  const DEFAULT_PROMPT = 'The Eiffel Tower is in the city of';
+  let modelName = $state(router.get('m') ?? 'gpt2');
+  let prompt = $state(router.get('p') ?? DEFAULT_PROMPT);
+  let jlens = $state(router.bool('j') ?? true);
+  let rollout = $state(router.num('roll') ?? 0);
 
-  let device = $state<string | null>(null); // null = engine unreachable
+  // The full run recipe lives in the URL — greedy runs are deterministic, so a
+  // copied link IS the run.
+  $effect(() => {
+    router.setQuery({
+      m: modelName === 'gpt2' ? null : modelName,
+      p: prompt === DEFAULT_PROMPT ? null : prompt,
+      j: jlens ? null : false,
+      roll: rollout || null
+    });
+  });
+
+  // Prompts we set programmatically (defaults, per-model samples). Picking a
+  // model swaps the prompt only if the current one is auto — never over a
+  // hand-typed prompt. Local checkpoints declare sample prompts that actually
+  // fit their vocab/positions ("17+25=", not Eiffel).
+  const autoPrompts = new Set([DEFAULT_PROMPT]);
+  function pickModel(name: string) {
+    modelName = name;
+    const want = engine.info(name)?.prompts?.[0] ?? DEFAULT_PROMPT;
+    if (autoPrompts.has(prompt.trim()) && prompt.trim() !== want) {
+      prompt = want;
+      autoPrompts.add(want);
+    }
+  }
+  $effect(() => {
+    for (const m of engine.models) for (const p of m.prompts ?? []) autoPrompts.add(p);
+  });
+
   let loading = $state(false);
   let error = $state('');
   let resp = $state<LensResponse | null>(null);
   let selPos = $state(0);
   let col = $state<ColumnResponse | null>(null);
   let colSeq = 0;
-
-  async function checkHealth() {
-    try {
-      const h = await fetchHealth();
-      device = h.device;
-      models = h.models;
-      return true;
-    } catch {
-      device = null;
-      return false;
-    }
-  }
 
   async function run() {
     if (loading || !prompt.trim()) return;
@@ -66,18 +81,19 @@
       selPos = r.tokens.length - 1;
       player.load(r.layers.map((_, i) => i));
       player.seek(r.layers.length - 1); // start at the top rung — scrub down to see it form
-      device = device ?? 'up';
+      engine.markUp();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
-      await checkHealth();
+      await engine.check();
     } finally {
       loading = false;
     }
   }
 
-  // On entry: if the engine is up, run the default prompt so the lens is alive.
+  // On entry: if the engine is up, run the restored/default prompt so the lens
+  // is alive (deterministic, so a URL-restored run reproduces itself).
   $effect(() => {
-    checkHealth().then((ok) => {
+    engine.check().then((ok) => {
       if (ok && !resp) void run();
     });
   });
@@ -134,21 +150,33 @@
   const cellTop = $derived(resp ? resp.grid[cur]?.[selPos] ?? [] : []);
   const jTop = $derived(ladder?.jtop ? ladder.jtop[cur] : null);
 
+  const selInfo = $derived(engine.info(modelName));
+
   const barW = (bits: number) =>
     resp ? `${Math.min(100, (bits / (resp.uniform * 1.3)) * 100)}%` : '0%';
 </script>
 
-<div class="topbar panel">
-  {@render brand()}
-
+<TopBar {panels}>
   <span class="formula mono" title="per-layer code length of the next token — L(D|M) refined with depth">
     <b style="color:var(--data)">−log₂ p</b> · depth
   </span>
 
   <label class="f">
     <span class="lbl">model</span>
-    <select bind:value={modelName}>
-      {#each models as m (m)}<option value={m}>{m}</option>{/each}
+    <select value={modelName} onchange={(e) => pickModel((e.currentTarget as HTMLSelectElement).value)}>
+      <optgroup label="hub">
+        {#each engine.hub as m (m.name)}<option value={m.name}>{m.name}</option>{/each}
+      </optgroup>
+      {#if engine.local.length}
+        <optgroup label="local checkpoints (Train·real)">
+          {#each engine.local as m (m.name)}
+            <option value={m.name} title={m.note}>{m.name}{m.n_positions ? ` · ${m.n_positions} pos` : ''}</option>
+          {/each}
+        </optgroup>
+      {/if}
+      {#if !engine.models.some((m) => m.name === modelName)}
+        <option value={modelName}>{modelName}</option>
+      {/if}
     </select>
   </label>
 
@@ -170,32 +198,24 @@
     <input class="rollout mono" type="number" min="0" max="64" bind:value={rollout} />
   </label>
 
-  <button class="primary" onclick={run} disabled={loading || device === null}>
+  <button class="primary" onclick={run} disabled={loading || !engine.up}>
     {loading ? 'running…' : 'run ▸'}
   </button>
 
-  <span class="status mono" class:off={device === null} title="engine service (engine/, port 5181)">
-    {device === null ? 'engine offline' : `engine · ${device}`}
-  </span>
-
-  {#if panels.isDirty}
-    <button class="ghost reset-layout" onclick={() => panels.reset()} title="Reset panel layout">⤢ reset</button>
+  {#if selInfo?.note}
+    <span class="hint mono" title={selInfo.note}>ℹ {selInfo.note}</span>
   {/if}
-</div>
 
-{#if device === null && !resp}
-  <div class="panel empty">
-    <p class="mono">engine offline</p>
-    <p class="faint">
-      This lens reads a <b>real</b> HuggingFace model through a local engine service. Start it:
-    </p>
-    <pre class="mono">cd engine
-uv run uvicorn main:app --port 5181</pre>
-    <p class="faint">
-      (set <span class="mono">HF_HOME</span> first to reuse an existing model cache — see README), then
-      <button class="ghost" onclick={() => checkHealth().then((ok) => { if (ok) void run(); })}>retry</button>
-    </p>
-  </div>
+  <span class="status mono" class:off={!engine.up} title="engine service (engine/, port 5181)">
+    {engine.up ? `engine · ${engine.device}` : 'engine offline'}
+  </span>
+</TopBar>
+
+{#if !engine.up && !resp}
+  <EngineOffline
+    what="This lens reads a real HuggingFace model through the local engine service."
+    onUp={() => void run()}
+  />
 {:else if resp}
   <PanelHost manager={panels}>
     <div class="col main">
@@ -278,34 +298,22 @@ uv run uvicorn main:app --port 5181</pre>
       </Panel>
 
       <Panel manager={panels} id="guide" weight={1}>
-        <InterpretGuide sections={['ladder', 'jlens', 'repro', 'small']} />
+        <InterpretGuide lens="logit" sections={['ladder', 'jlens', 'repro', 'small']} />
       </Panel>
     </div>
   </PanelHost>
 
-  <div class="panel transport-panel">
-    <Controls {player} />
-    <div class="note mono" title={note}>{note}{error ? ` · ${error}` : ''}</div>
-  </div>
+  <TransportBar {player} note={note + (error ? ` · ${error}` : '')} />
 {:else}
   <div class="panel empty"><p class="mono faint">{loading ? 'running…' : error || 'ready'}</p></div>
 {/if}
 
 <style>
-  .topbar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; flex-wrap: wrap; }
-  .formula { font-size: 12px; white-space: nowrap; }
-  .f { display: flex; align-items: center; gap: 6px; }
-  .lbl { font-size: 11px; color: var(--muted); }
-  .data-input { flex: 1; min-width: 200px; }
-  .cb { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); white-space: nowrap; }
   .rollout { width: 52px; }
-  .status { font-size: 10.5px; color: var(--ok, #4dc07d); white-space: nowrap; }
-  .status.off { color: var(--bad, #e5484d); }
+  .hint { max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
 
   .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
-  .empty pre { background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 6px; padding: 10px 14px; font-size: 12px; }
 
-  .col { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0; }
   .col.main { flex: 3 1 0; }
   .col.side { flex: 2 1 0; }
 
@@ -320,7 +328,4 @@ uv run uvicorn main:app --port 5181</pre>
   .pct { font-size: 10px; color: var(--muted); min-width: 44px; text-align: right; }
   .bitsline { display: flex; align-items: center; gap: 8px; font-size: 10.5px; margin-top: 2px; }
   .predline { font-size: 10.5px; margin-top: auto; padding-top: 6px; border-top: 1px solid var(--border-2); }
-
-  .transport-panel { display: flex; align-items: center; gap: 16px; padding: 8px 12px; }
-  .note { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

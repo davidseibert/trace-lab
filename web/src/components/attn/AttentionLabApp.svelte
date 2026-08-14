@@ -1,20 +1,20 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte';
   import { Player } from '../../lib/player.svelte';
   import { mulberry32 } from '../../lib/llm/rng';
   import type { TensorSnap } from '../../lib/llm/tensor';
   import { computeAttention, randomMatrix, identityMatrix, type AttnConfig } from '../../lib/attn/attention';
   import { PanelManager } from '../../lib/panels/panels.svelte';
+  import { router } from '../../lib/router.svelte';
 
-  import Controls from '../Controls.svelte';
+  import InterpretGuide from '../InterpretGuide.svelte';
   import Panel from '../Panel.svelte';
   import PanelHost from '../PanelHost.svelte';
+  import TopBar from '../shell/TopBar.svelte';
+  import TransportBar from '../shell/TransportBar.svelte';
   import ActGrid from '../llm/ActGrid.svelte';
   import AttentionView from '../llm/AttentionView.svelte';
   import WeightEditor from './WeightEditor.svelte';
   import CellInspector from './CellInspector.svelte';
-
-  let { brand }: { brand: Snippet } = $props();
 
   const panels = new PanelManager('attn', [
     { id: 'tokens', title: 'Tokens' },
@@ -24,7 +24,8 @@
     { id: 'scores', title: 'Scores — QKᵀ, scaled' },
     { id: 'weights', title: 'Attention weights' },
     { id: 'output', title: 'Output — per head, concat, final' },
-    { id: 'inspect', title: 'Cell inspector' }
+    { id: 'inspect', title: 'Cell inspector' },
+    { id: 'guide', title: 'How to read this', collapsed: true }
   ]);
 
   const DMODEL_OPTS = [2, 4, 6, 8];
@@ -32,12 +33,29 @@
   const PALETTE = ['#ff3355', '#3388ff', '#ffcc00', '#00dd66', '#ff7722', '#bb44ff', '#22bbdd', '#dd4488'];
   const MAX_TOKENS = 6;
 
-  let tokenText = $state('the cat sat');
-  let dModel = $state(4);
-  let nHeads = $state(1);
-  let causal = $state(false);
-  let seed = $state(1);
-  let weightPreset = $state<'random' | 'identity'>('random');
+  const dParam = router.num('d');
+  const hParam = router.num('h');
+  let tokenText = $state(router.get('t') ?? 'the cat sat');
+  let dModel = $state(dParam !== null && DMODEL_OPTS.includes(dParam) ? dParam : 4);
+  let nHeads = $state(hParam !== null && NHEADS_OPTS.includes(hParam) ? hParam : 1);
+  let causal = $state(router.bool('c') ?? false);
+  let seed = $state(router.num('seed') ?? 1);
+  let weightPreset = $state<'random' | 'identity'>(
+    router.get('w') === 'identity' ? 'identity' : 'random'
+  );
+
+  // Shape + seed + preset live in the URL (hand-edited matrices deliberately
+  // don't — they're the one piece of state too heavy for a query string).
+  $effect(() => {
+    router.setQuery({
+      t: tokenText === 'the cat sat' ? null : tokenText,
+      d: dModel === 4 ? null : dModel,
+      h: nHeads === 1 ? null : nHeads,
+      c: causal ? true : null,
+      seed: seed === 1 ? null : seed,
+      w: weightPreset === 'random' ? null : weightPreset
+    });
+  });
 
   const tokens = $derived.by(() => {
     const t = tokenText.trim().split(/\s+/).filter(Boolean).slice(0, MAX_TOKENS);
@@ -98,9 +116,7 @@
   }
 </script>
 
-<div class="topbar panel">
-  {@render brand()}
-
+<TopBar {panels}>
   <label class="f query">
     <span class="lbl">tokens</span>
     <input
@@ -144,12 +160,8 @@
 
   <button class="ghost" title="Re-roll random values with a new seed" onclick={() => (seed += 1)}>🎲 seed {seed}</button>
 
-  <span class="spacer"></span>
-
-  {#if panels.isDirty}
-    <button class="ghost reset-layout" onclick={() => panels.reset()} title="Reset panel layout">⤢ reset</button>
-  {/if}
-</div>
+  <span class="endspacer"></span>
+</TopBar>
 
 {#if trace.T > 0}
 <PanelHost manager={panels}>
@@ -263,36 +275,24 @@
     <Panel manager={panels} id="inspect" weight={1}>
       <CellInspector {trace} {tokens} {selected} />
     </Panel>
+
+    <Panel manager={panels} id="guide" weight={1}>
+      <InterpretGuide lens="attn" sections={['attnlab']} />
+    </Panel>
   </div>
 </PanelHost>
 
-<div class="panel transport-panel">
-  <Controls {player} />
-  <div class="note mono">
-    scrubbing focuses the arc diagram + weights on token <b>{tokens[player.index]}</b> (position {player.index})
-  </div>
-</div>
+<TransportBar {player}>
+  scrubbing focuses the arc diagram + weights on token <b>{tokens[player.index]}</b> (position {player.index})
+</TransportBar>
 {/if}
 
 <style>
-  .topbar {
-    display: flex;
-    flex: 0 0 auto;
-    flex-direction: row;
-    align-items: center;
-    gap: 12px;
-    padding: 7px 12px;
-    flex-wrap: wrap;
-  }
-  .f { display: flex; align-items: center; gap: 6px; }
-  .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
   .query { min-width: 160px; }
   .q-input { width: 160px; font-size: 12px; padding: 5px 8px; }
-  .spacer { flex: 0 1 auto; margin-left: auto; }
-  .reset-layout { padding: 4px 9px; font-size: 11px; white-space: nowrap; }
+  .endspacer { flex: 0 1 auto; margin-left: auto; }
   button.ghost.active { border-color: var(--model); color: var(--model); }
 
-  .col { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0; }
   .col-a { flex: 1.1 1 0; }
   .col-b { flex: 1.2 1 0; }
   .col-c { flex: 1.1 1 0; }
@@ -316,19 +316,4 @@
   .triple, .pair { display: flex; gap: 10px; align-items: flex-start; }
   .qkv-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
   .qkv-label { font-size: 10px; color: var(--muted); }
-
-  .transport-panel {
-    display: flex;
-    flex: 0 0 auto;
-    flex-direction: row;
-    align-items: center;
-    gap: 16px;
-    padding: 7px 12px;
-  }
-  .note {
-    flex: 1; min-width: 0;
-    font-size: 12px; color: var(--muted);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    text-align: right;
-  }
 </style>

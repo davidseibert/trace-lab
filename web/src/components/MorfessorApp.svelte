@@ -1,5 +1,4 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte';
   import { Player } from '../lib/player.svelte';
   import {
     morfessorTrace,
@@ -9,87 +8,45 @@
     type MorfStep,
     type CodeMode
   } from '../lib/morfessor/morfessor';
+  import { router } from '../lib/router.svelte';
+  import { MORPH_SAMPLES, MORPH_DEFAULT_SAMPLE } from '../lib/morphology/samples';
 
   import CorpusView from './morf/CorpusView.svelte';
   import ReanalysisView from './morf/ReanalysisView.svelte';
   import CostPanel from './CostPanel.svelte';
   import CostChart from './CostChart.svelte';
-  import Controls from './Controls.svelte';
+  import InterpretGuide from './InterpretGuide.svelte';
   import Panel from './Panel.svelte';
   import PanelHost from './PanelHost.svelte';
+  import TopBar from './shell/TopBar.svelte';
+  import TransportBar from './shell/TransportBar.svelte';
   import { PanelManager } from '../lib/panels/panels.svelte';
-
-  let { brand }: { brand: Snippet } = $props();
 
   const panels = new PanelManager('morfessor', [
     { id: 'state', title: 'Lexicon & corpus' },
     { id: 'reanalysis', title: 'Re-analysis' },
     { id: 'input', title: 'Word list (data)' },
     { id: 'cost', title: 'Description length' },
-    { id: 'chart', title: 'Evolution' }
+    { id: 'chart', title: 'Evolution' },
+    { id: 'guide', title: 'How to read this', collapsed: true }
   ]);
 
-  // Same word lists as the merge lens, so the two algorithms can be compared on
-  // identical data — they approach the optimum from opposite extremes.
-  const SAMPLES: Record<string, string> = {
-    'verb inflection': `walk 6
-walks 3
-walking 8
-walked 4
-talk 5
-talks 2
-talking 7
-talked 3
-jump 2
-jumps 1
-jumping 3
-jumped 2`,
-    'un- prefix': `happy 5
-unhappy 3
-kind 4
-unkind 2
-clear 4
-unclear 2
-lock 3
-unlock 4
-fair 3
-unfair 2`,
-    plurals: `cat 6
-cats 4
-dog 7
-dogs 5
-bird 3
-birds 2
-hand 4
-hands 3
-book 5
-books 4`,
-    'agreement (Spanish-ish)': `gato 4
-gatos 3
-gata 2
-gatas 1
-perro 5
-perros 4
-perra 2
-perras 1
-nino 3
-ninos 2
-nina 2
-ninas 1`,
-    'frequency matters': `the 100
-then 4
-there 5
-they 8
-them 6
-a 80
-at 7
-an 9`
-  };
+  const SAMPLES = MORPH_SAMPLES;
+  const DEFAULT_SAMPLE = MORPH_DEFAULT_SAMPLE;
 
-  const DEFAULT_SAMPLE = 'verb inflection';
-  let sampleKey = $state(DEFAULT_SAMPLE);
-  let text = $state(SAMPLES[DEFAULT_SAMPLE]);
-  let codeMode = $state<CodeMode>('shannon');
+  const initialSample =
+    router.get('sample') && SAMPLES[router.get('sample')!] ? router.get('sample')! : DEFAULT_SAMPLE;
+  let sampleKey = $state(initialSample);
+  let text = $state(router.get('text') ?? SAMPLES[initialSample]);
+  let codeMode = $state<CodeMode>(router.get('code') === 'uniform' ? 'uniform' : 'shannon');
+
+  $effect(() => {
+    router.setQuery({
+      sample: sampleKey === DEFAULT_SAMPLE ? null : sampleKey,
+      text: text === SAMPLES[sampleKey] ? null : text,
+      code: codeMode === 'shannon' ? null : codeMode
+    });
+  });
 
   const player = new Player<MorfStep>();
 
@@ -111,9 +68,7 @@ an 9`
   const epochLabel = $derived(!cur ? '' : cur.epoch < 0 ? 'converged' : `epoch ${cur.epoch + 1}`);
 </script>
 
-<div class="topbar panel">
-  {@render brand()}
-
+<TopBar {panels}>
   <span class="formula mono" title="minimize total bits = lexicon + segmented corpus">
     <b style="color:var(--total)">min</b>
     <b style="color:var(--model)">L(M)</b>+<b style="color:var(--data)">L(D|M)</b>
@@ -130,11 +85,7 @@ an 9`
   </div>
 
   <span class="chars mono muted">{wordCount}w</span>
-
-  {#if panels.isDirty}
-    <button class="ghost reset-layout" onclick={() => panels.reset()} title="Reset panel layout">⤢ reset</button>
-  {/if}
-</div>
+</TopBar>
 
 {#if cur}
   <PanelHost manager={panels}>
@@ -166,9 +117,9 @@ an 9`
               {#each Object.keys(SAMPLES) as k}<option value={k}>{k}</option>{/each}
             </select>
           </label>
-          <textarea class="data-input mono scrollbar" bind:value={text} spellcheck="false"
+          <textarea class="word-input mono scrollbar" bind:value={text} spellcheck="false"
                     placeholder="one word per line, optional “word count”…"></textarea>
-          <p class="hint faint">Every word starts whole; the sweep splits it to share morphs. Add a count like <span class="mono">walking 8</span> to weight by frequency.</p>
+          <p class="editor-hint faint">Every word starts whole; the sweep splits it to share morphs. Add a count like <span class="mono">walking 8</span> to weight by frequency.</p>
         </div>
       </Panel>
 
@@ -182,58 +133,25 @@ an 9`
       <Panel manager={panels} id="chart" weight={1}>
         <CostChart steps={player.steps} index={player.index} onSeek={(i) => player.seek(i)} />
       </Panel>
+
+      <Panel manager={panels} id="guide" weight={1}>
+        <InterpretGuide lens="morfessor" sections={['mdlcore', 'codes', 'morphpair']} />
+      </Panel>
     </div>
   </PanelHost>
 
-  <div class="panel transport-panel">
-    <Controls {player} />
-    <div class="note mono" class:converged={cur.epoch < 0} title={cur.note}>{cur.note}</div>
-  </div>
+  <TransportBar {player} note={cur.note} converged={cur.epoch < 0} />
 {/if}
 
 <style>
-  .topbar {
-    display: flex;
-    flex: 0 0 auto;
-    flex-direction: row;
-    align-items: center;
-    gap: 14px;
-    padding: 7px 12px;
-  }
-  .formula { font-size: 12px; white-space: nowrap; }
-  .formula b { font-weight: 700; }
-  .spacer { flex: 1 1 auto; }
-  .f { display: flex; align-items: center; gap: 6px; }
-  .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
-  .toggle-group button { padding: 4px 9px; font-size: 12px; }
-  .chars { font-size: 11px; white-space: nowrap; }
-  .reset-layout { padding: 4px 9px; font-size: 11px; white-space: nowrap; }
-
-  .editor { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; }
-  .editor .f { flex: 0 0 auto; }
-  .data-input {
-    flex: 1 1 auto; min-height: 60px; width: 100%; box-sizing: border-box;
-    font-size: 12px; padding: 7px 9px; line-height: 1.5; resize: none; white-space: pre;
-  }
-  .hint { flex: 0 0 auto; font-size: 11px; margin: 0; line-height: 1.4; }
-
-  .col { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0; }
   .col-left { flex: 1.45 1 0; }
   .col-right { flex: 1 1 0; }
 
-  .transport-panel {
-    display: flex;
-    flex: 0 0 auto;
-    flex-direction: row;
-    align-items: center;
-    gap: 16px;
-    padding: 7px 12px;
+  .editor { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; }
+  .editor .f { flex: 0 0 auto; }
+  .word-input {
+    flex: 1 1 auto; min-height: 60px; width: 100%; box-sizing: border-box;
+    font-size: 12px; padding: 7px 9px; line-height: 1.5; resize: none; white-space: pre;
   }
-  .note {
-    flex: 1; min-width: 0;
-    font-size: 12px; color: var(--muted);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    text-align: right;
-  }
-  .note.converged { color: var(--good); }
+  .editor-hint { flex: 0 0 auto; font-size: 11px; margin: 0; line-height: 1.4; white-space: normal; }
 </style>

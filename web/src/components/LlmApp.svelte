@@ -1,15 +1,17 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte';
   import { Player } from '../lib/player.svelte';
   import { trainTrace, type LlmStep } from '../lib/llm/trainTrace';
   import { DATASETS, DATASET_KEYS } from '../lib/llm/datasets';
   import { tokenColor } from '../lib/llm/colors';
   import { makeLab, type Lab, type EvalCase } from '../lib/llm/lab';
   import type { FactSpec } from '../lib/llm/implant';
+  import { router } from '../lib/router.svelte';
 
-  import Controls from './Controls.svelte';
+  import InterpretGuide from './InterpretGuide.svelte';
   import Panel from './Panel.svelte';
   import PanelHost from './PanelHost.svelte';
+  import TopBar from './shell/TopBar.svelte';
+  import TransportBar from './shell/TransportBar.svelte';
   import ActGrid from './llm/ActGrid.svelte';
   import AttentionView from './llm/AttentionView.svelte';
   import OutputBars from './llm/OutputBars.svelte';
@@ -17,8 +19,6 @@
   import LensView from './llm/LensView.svelte';
   import ImplantPanel from './llm/ImplantPanel.svelte';
   import { PanelManager } from '../lib/panels/panels.svelte';
-
-  let { brand }: { brand: Snippet } = $props();
 
   const panels = new PanelManager('llm', [
     { id: 'tokens', title: 'Tokens' },
@@ -30,12 +30,16 @@
     { id: 'output', title: 'Next-token guess' },
     { id: 'lens', title: 'Logit lens' },
     { id: 'loss', title: 'Loss over training' },
-    { id: 'explain', title: 'Readout' }
+    { id: 'explain', title: 'Readout' },
+    { id: 'guide', title: 'How to read this', collapsed: true }
   ]);
 
   const STEPS = 300;
-  let datasetKey = $state(DATASET_KEYS[0]);
-  let seed = $state(1);
+  const dsParam = router.get('ds');
+  const initialDs = dsParam && DATASETS[dsParam] ? dsParam : DATASET_KEYS[0];
+  const initialQ = router.get('q');
+  let datasetKey = $state(initialDs);
+  let seed = $state(router.num('seed') ?? 1);
 
   const ds = $derived(DATASETS[datasetKey]);
   const player = new Player<LlmStep>();
@@ -57,18 +61,30 @@
   });
 
   // --- Query box: replay an arbitrary prompt against the current step's model.
-  let queryText = $state(DATASETS[DATASET_KEYS[0]].probe.join(' '));
+  let queryText = $state(initialQ ?? DATASETS[initialDs].probe.join(' '));
   let committedQuery = $state<number[] | null>(null);
 
   // --- Implanted facts: applied on top of whichever step is selected.
   let facts = $state<FactSpec[]>([]);
   let factSeq = 0;
 
-  // Reset the query and implants whenever the dataset (and vocabulary) changes.
+  // Reset the query and implants whenever the dataset (and vocabulary) CHANGES —
+  // guarded so the first run doesn't clobber a URL-restored query.
+  let prevDs = initialDs;
   $effect(() => {
+    if (datasetKey === prevDs) return;
+    prevDs = datasetKey;
     queryText = DATASETS[datasetKey].probe.join(' ');
     committedQuery = null;
     facts = [];
+  });
+
+  $effect(() => {
+    router.setQuery({
+      ds: datasetKey === DATASET_KEYS[0] ? null : datasetKey,
+      seed: seed === 1 ? null : seed,
+      q: committedQuery !== null ? queryText : null
+    });
   });
 
   function parseQuery(text: string): { ids?: number[]; error?: string } {
@@ -86,6 +102,12 @@
 
   const parsed = $derived(parseQuery(queryText));
   const parseError = $derived(queryText.trim() === '' ? '' : (parsed.error ?? ''));
+
+  // Restore a committed query from the URL (only if it still parses).
+  if (initialQ) {
+    const p = parseQuery(initialQ);
+    if (p.ids) committedQuery = p.ids;
+  }
 
   function runQuery() {
     if (parsed.ids) committedQuery = parsed.ids;
@@ -165,9 +187,7 @@
   const activeTargetProb = $derived(activeViz ? activeViz.probs[ds.vocab.indexOf(ds.probeTarget)] : 0);
 </script>
 
-<div class="topbar panel">
-  {@render brand()}
-
+<TopBar {panels}>
   <label class="f">
     <span class="lbl">dataset</span>
     <select value={datasetKey} onchange={(e) => (datasetKey = (e.currentTarget as HTMLSelectElement).value)}>
@@ -200,12 +220,8 @@
 
   <button class="ghost" title="Re-initialise weights with a new random seed" onclick={() => (seed += 1)}>🎲 seed {seed}</button>
 
-  <span class="spacer"></span>
-
-  {#if panels.isDirty}
-    <button class="ghost reset-layout" onclick={() => panels.reset()} title="Reset panel layout">⤢ reset</button>
-  {/if}
-</div>
+  <span class="endspacer"></span>
+</TopBar>
 
 {#if activeViz}
   <PanelHost manager={panels}>
@@ -305,36 +321,25 @@
           {/if}
         </div>
       </Panel>
+
+      <Panel manager={panels} id="guide" weight={1}>
+        <InterpretGuide lens="llm" sections={['minigpt']} />
+      </Panel>
     </div>
   </PanelHost>
 
-  <div class="panel transport-panel">
-    <Controls {player} />
-    <div class="note mono" class:converged={!cur?.chosen} title={note}>{note}</div>
-  </div>
+  <TransportBar {player} {note} converged={!cur?.chosen} />
 {/if}
 
 <style>
-  .topbar {
-    display: flex;
-    flex: 0 0 auto;
-    flex-direction: row;
-    align-items: center;
-    gap: 12px;
-    padding: 7px 12px;
-  }
-  .f { display: flex; align-items: center; gap: 6px; }
-  .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
   .query { flex: 1; min-width: 220px; }
   .q-input { flex: 1; min-width: 120px; font-size: 12px; padding: 5px 8px; }
   .q-input.invalid { border-color: var(--bad); }
   .qerr { font-size: 11px; color: var(--bad); white-space: nowrap; }
   .viewing { font-size: 11px; color: var(--muted); white-space: nowrap; }
   .viewing.q { color: var(--chosen); }
-  .spacer { flex: 0 1 auto; margin-left: auto; }
-  .reset-layout { padding: 4px 9px; font-size: 11px; white-space: nowrap; }
+  .endspacer { flex: 0 1 auto; margin-left: auto; }
 
-  .col { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0; }
   .col-a { flex: 1 1 0; }
   .col-b { flex: 1.3 1 0; }
   .col-c { flex: 1.1 1 0; }
@@ -349,20 +354,4 @@
 
   .readout { display: flex; flex-direction: column; gap: 6px; }
   .say { margin: 0; font-size: 12.5px; line-height: 1.45; }
-
-  .transport-panel {
-    display: flex;
-    flex: 0 0 auto;
-    flex-direction: row;
-    align-items: center;
-    gap: 16px;
-    padding: 7px 12px;
-  }
-  .note {
-    flex: 1; min-width: 0;
-    font-size: 12px; color: var(--muted);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    text-align: right;
-  }
-  .note.converged { color: var(--good); }
 </style>
