@@ -62,6 +62,7 @@ Each is a way to write, read, or account for structure in bits. See
 | **Mini-GPT** | a training trace | implant facts, read the residual ladder, J-lens |
 | **Attention Lab** | hand-sized, editable Q/K/V matrices | watch scaled dot-product attention compute, one clickable cell at a time |
 | **Logit·real** | GPT-2 / Qwen | the classic logit lens + J-lens over a real model, in bits |
+| **Reason·trace** | Qwen3-0.6B thinking traces | stream a reasoning trace live, per-token bits ladder as it's born — reasoning as compression |
 
 ## Architecture
 
@@ -75,8 +76,29 @@ come for free.
 | `web/src/lib/player.svelte.ts` | playback: an index into the immutable trace |
 | `web/src/components/` | shared transport + cost/candidate panels, plus per-lens views |
 | `engine/lens.py` | the real-model logit lens + J-lens (plain `transformers`) |
-| `engine/main.py` | the FastAPI service (`/health`, `/lens`) |
+| `engine/main.py` | the FastAPI service (`/health`, `/lens`, `/column`, SSE `/chat`) |
 | `tui/src/` | the OpenTUI front-end (talks to the engine over HTTP) |
+| `tui/src/spectate.ts` | read-only sidecar in the TUI: `/state` + `/screen` on :5182 |
+| `mcp/server.ts` | MCP bridge — lets Claude Code spectate the TUI + query the engine |
+
+## Spectating from Claude Code (MCP)
+
+`.mcp.json` registers a `trace-lab` MCP server (`mcp/server.ts`, runs under
+bun — `cd mcp && bun install` once). While the TUI is running, Claude can see
+exactly what you see and run its own experiments alongside:
+
+| tool | what it does |
+|---|---|
+| `get_screen` | the TUI's current frame, as literal text |
+| `get_state` | model/prompt/selection + the selected column's bits ladder |
+| `get_grid` | the full layer × position lens grid (top-k per cell) |
+| `query_lens` / `query_column` | run any prompt against the engine directly, without touching your view |
+| `engine_health` | device, available/resident models, sidecar reachability |
+
+The TUI serves this through a read-only HTTP sidecar on **:5182**
+(`tui/src/spectate.ts`; `TUI_SPECTATE_PORT=0` disables it). `make tui` passes
+`--service-ports` so the container publishes it; the MCP server reads
+`TUI_SPECTATE` / `LENS_ENGINE` to find the sidecar and engine elsewhere.
 
 ## Model weights
 

@@ -6,9 +6,10 @@
   import GraphApp from './components/GraphApp.svelte';
   import CoderApp from './components/CoderApp.svelte';
   import LogitApp from './components/LogitApp.svelte';
+  import ReasonApp from './components/ReasonApp.svelte';
   import AttentionLabApp from './components/attn/AttentionLabApp.svelte';
 
-  type Lens = 'grammar' | 'morph' | 'morfessor' | 'llm' | 'attn' | 'graph' | 'coder' | 'logit';
+  type Lens = 'grammar' | 'morph' | 'morfessor' | 'llm' | 'attn' | 'graph' | 'coder' | 'logit' | 'reason';
   let lens = $state<Lens>('grammar');
 </script>
 
@@ -26,6 +27,7 @@
       <button class:active={lens === 'graph'} onclick={() => (lens = 'graph')}>Graph·SUBDUE</button>
       <button class:active={lens === 'coder'} onclick={() => (lens = 'coder')}>Coder</button>
       <button class:active={lens === 'logit'} onclick={() => (lens = 'logit')}>Logit·real</button>
+      <button class:active={lens === 'reason'} onclick={() => (lens = 'reason')}>Reason·trace</button>
     </div>
   </div>
 {/snippet}
@@ -45,6 +47,8 @@
     <GraphApp {brand} />
   {:else if lens === 'logit'}
     <LogitApp {brand} />
+  {:else if lens === 'reason'}
+    <ReasonApp {brand} />
   {:else}
     <CoderApp {brand} />
   {/if}

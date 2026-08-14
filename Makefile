@@ -43,9 +43,11 @@ web: ## Just the Svelte sandbox (every lens except Logit·real)
 # line builds and runs only the small TUI image and connects over the network.
 # LENS_ENGINE=http://engine-cpu:5181 (with a running engine-cpu) points the TUI
 # at a CPU engine instead.
+# --service-ports publishes the spectate sidecar (5182) that the MCP bridge
+# reads; `compose run` skips the service's port mappings without it.
 tui: volume ## Launch the OpenTUI terminal front-end (GPU engine starts first)
 	$(COMPOSE) --profile gpu up -d --wait engine-gpu
-	$(COMPOSE) run --rm --build tui
+	$(COMPOSE) run --rm --build --service-ports tui
 
 smoke: volume ## Bits-ladder sanity check on GPU; PROMPT="..." and MODEL=... to override
 	$(COMPOSE) run --rm --build smoke python smoke.py $(if $(PROMPT),"$(PROMPT)",)

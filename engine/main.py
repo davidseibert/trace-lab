@@ -18,13 +18,26 @@ from collections import OrderedDict
 from dataclasses import asdict
 from pathlib import Path
 
+import json
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from lens import column_report, lens_report, load_model, pick_device
+from lens import column_report, lens_report, load_model, pick_device, reason_events, render_chat
 
-ALLOWED_MODELS = ["gpt2", "gpt2-medium", "gpt2-large", "Qwen/Qwen2.5-0.5B"]
+# The Qwen3-0.6B pair mirrors Raschka's *Build a Reasoning Model from Scratch*
+# checkpoints: his base/reasoning .pth files are repackagings of these exact
+# weights, so lensing these = lensing the book's models.
+ALLOWED_MODELS = [
+    "gpt2",
+    "gpt2-medium",
+    "gpt2-large",
+    "Qwen/Qwen2.5-0.5B",
+    "Qwen/Qwen3-0.6B-Base",
+    "Qwen/Qwen3-0.6B",
+]
 
 # `make tui MODEL=...` / `LENS_MODEL` can name a model that isn't on the list
 # above; honour it as the default and add it, so trying a new architecture
@@ -103,22 +116,47 @@ def _get(model_name: str):
 
 class LensRequest(BaseModel):
     model: str = DEFAULT
-    prompt: str = Field(min_length=1, max_length=2000)
+    prompt: str = Field(min_length=1, max_length=8000)
     top_k: int = Field(default=5, ge=1, le=20)
     jlens: bool = True
-    # Greedily decode this many tokens server-side and lens over
-    # prompt+continuation, so multi-token answers get a column per token.
-    rollout: int = Field(default=0, ge=0, le=64)
+    # Greedily decode UP TO this many tokens server-side (stops at EOS) and
+    # lens over prompt+continuation — a column per generated token. Sized for
+    # reasoning traces, hence the generous cap.
+    rollout: int = Field(default=0, ge=0, le=2048)
+    # Wrap the prompt in the model's chat template before lensing. With
+    # thinking=True a template that supports it (Qwen3) opens a <think> block,
+    # so the rollout IS the reasoning trace.
+    chat: bool = False
+    thinking: bool = True
 
 
 class ColumnRequest(BaseModel):
     model: str = DEFAULT
-    prompt: str = Field(min_length=1, max_length=2000)
+    prompt: str = Field(min_length=1, max_length=8000)
     # Column of the (rollout-extended) sequence to compute the ladder at.
     pos: int = Field(ge=0)
     top_k: int = Field(default=5, ge=1, le=20)
     jlens: bool = True
-    rollout: int = Field(default=0, ge=0, le=64)
+    rollout: int = Field(default=0, ge=0, le=2048)
+    # Must match the /lens request's flags for the columns to line up.
+    chat: bool = False
+    thinking: bool = True
+    # The exact token ids to lens (e.g. a streamed /chat trace). Preferred:
+    # skips the prompt+rollout re-decode (no fork risk) and measures the
+    # ladder against the token that actually follows pos — required for
+    # sampled traces, where the taken token isn't the argmax. When set,
+    # prompt/chat/thinking/rollout are ignored.
+    ids: list[int] | None = Field(default=None, min_length=2, max_length=4096)
+
+
+def _render(tok, req) -> str:  # any request with .chat / .prompt / .thinking
+    """The text actually lensed: the raw prompt, or its chat-templated form."""
+    if not req.chat:
+        return req.prompt
+    try:
+        return render_chat(tok, req.prompt, thinking=req.thinking)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/")
@@ -145,7 +183,7 @@ def lens(req: LensRequest):
     model, tok, _device = _get(req.model)
     try:
         report = lens_report(
-            model, tok, req.prompt, top_k=req.top_k, jlens=req.jlens, rollout=req.rollout
+            model, tok, _render(tok, req), top_k=req.top_k, jlens=req.jlens, rollout=req.rollout
         )
     except ValueError as e:
         # A prompt the model can't index (too long / out of vocab). Caught on
@@ -154,6 +192,44 @@ def lens(req: LensRequest):
     except RuntimeError as e:
         raise HTTPException(500, str(e))
     return {"model": req.model, "prompt": req.prompt, **asdict(report)}
+
+
+class ChatRequest(BaseModel):
+    model: str = "Qwen/Qwen3-0.6B"
+    prompt: str = Field(min_length=1, max_length=8000)
+    # chat=False streams a raw continuation instead of a templated turn.
+    chat: bool = True
+    thinking: bool = True
+    max_new: int = Field(default=512, ge=1, le=2048)
+    # 0 = greedy. Thinking mode is meant to be sampled (Qwen recommends ~0.6);
+    # the seed is generated if omitted and echoed in the meta event, so any
+    # run can be replayed exactly. Reported bits always price the model's
+    # true distribution — temperature only picks the path.
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    seed: int | None = Field(default=None, ge=0)
+
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    """Stream a greedy decode as Server-Sent Events, one per token, each
+    carrying that token's classic-lens ladder — the live feed the reasoning
+    lens renders as the model thinks. J-lens drill-ins go through /column
+    (same prompt + chat flags, rollout = tokens generated so far)."""
+    model, tok, _device = _get(req.model)
+    text = _render(tok, req)
+
+    def gen():
+        try:
+            for ev in reason_events(model, tok, text, max_new=req.max_new,
+                                    temperature=req.temperature, seed=req.seed):
+                yield f"data: {json.dumps(ev)}\n\n"
+        except ValueError as e:
+            yield f"data: {json.dumps({'event': 'error', 'detail': str(e)})}\n\n"
+        except RuntimeError as e:
+            yield f"data: {json.dumps({'event': 'error', 'detail': str(e)})}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache"})
 
 
 @app.post("/column")
@@ -167,8 +243,8 @@ def column(req: ColumnRequest):
     model, tok, _device = _get(req.model)
     try:
         report = column_report(
-            model, tok, req.prompt, req.pos,
-            top_k=req.top_k, jlens=req.jlens, rollout=req.rollout,
+            model, tok, "" if req.ids is not None else _render(tok, req), req.pos,
+            top_k=req.top_k, jlens=req.jlens, rollout=req.rollout, ids=req.ids,
         )
     except ValueError as e:
         # A prompt the model can't index, or pos past the end. Caught on CPU

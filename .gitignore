@@ -6,3 +6,5 @@ web/.svelte-kit
 .venv
 __pycache__
 data
+.claude/settings.local.json
+NUL

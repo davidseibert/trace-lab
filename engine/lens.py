@@ -70,6 +70,47 @@ def _blocks(model):
     raise ValueError(f"Don't know the block list for {type(model).__name__}.")
 
 
+def render_chat(tok, text: str, thinking: bool = True) -> str:
+    """Wrap a user message in the model's chat template, generation-ready.
+
+    ``enable_thinking`` is honoured by templates that know it (Qwen3's opens a
+    <think> block); templates that don't simply ignore the extra variable.
+    """
+    if tok.chat_template is None:
+        raise ValueError(
+            "this model's tokenizer has no chat template — use an instruct/"
+            "reasoning variant, or turn chat mode off."
+        )
+    return tok.apply_chat_template(
+        [{"role": "user", "content": text}],
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=thinking,
+    )
+
+
+def _decode_rollout(model, input_ids: torch.Tensor, rollout: int) -> torch.Tensor:
+    """Greedily decode up to ``rollout`` tokens onto ``input_ids``, KV-cached.
+
+    ``model.generate`` instead of a re-forward-per-token loop: a reasoning
+    trace is hundreds of tokens, and without the cache that loop is O(n²) in
+    forwards. Stops early at EOS, so ``rollout`` is a budget, not a promise —
+    callers must measure the returned sequence, not assume prompt+rollout.
+    """
+    if not rollout:
+        return input_ids
+    eos = model.generation_config.eos_token_id
+    if isinstance(eos, list):
+        eos = eos[0] if eos else None
+    return model.generate(
+        input_ids=input_ids,
+        attention_mask=torch.ones_like(input_ids),
+        max_new_tokens=rollout,
+        do_sample=False,
+        pad_token_id=eos,  # silences the pad=eos warning; nothing is padded
+    )
+
+
 def _clean(s: str) -> str:
     s = s.replace("\n", "⏎").replace("\t", "⇥")
     return s if s != "" else "∅"
@@ -156,15 +197,17 @@ class ColumnReport:
     uniform: float
 
 
-def _ladder(model, tok, input_ids, out, hidden, pos: int, top_k: int, jlens: bool):
+def _ladder(model, tok, input_ids, out, hidden, pos: int, top_k: int, jlens: bool,
+            target_id: int | None = None):
     """Classic bits per rung at ``pos`` — and, if asked, the J-lens decode per
-    rung — both measured against the model's real top-1 prediction at ``pos``
-    (the token that comes after that column)."""
+    rung — measured against the model's top-1 prediction at ``pos`` (the token
+    after that column), or against ``target_id`` when the caller knows which
+    token was actually taken (a sampled trace, where taken ≠ argmax)."""
     final_norm, unembed = _final_norm_and_unembed(model)
     n = len(hidden)
 
     final_probs = out.logits[0, pos].float().softmax(-1)
-    pred_id = int(final_probs.argmax())
+    pred_id = int(final_probs.argmax()) if target_id is None else target_id
     pred = {
         "token": _clean(tok.decode([pred_id])),
         "p": float(final_probs[pred_id]),
@@ -242,13 +285,12 @@ def lens_report(
     input_ids = enc["input_ids"]
     n_prompt = input_ids.shape[1]
 
-    # Rollout: greedily decode `rollout` tokens and lens over prompt+continuation.
-    # Each grid column only attends to positions before it (causal), so forcing
-    # the model's own answer in doesn't leak anything backwards — it just gives
-    # every generated token its own column to watch form with depth.
-    for _ in range(rollout):
-        step = model(input_ids=input_ids).logits[:, -1].argmax(-1, keepdim=True)
-        input_ids = torch.cat([input_ids, step], dim=1)
+    # Rollout: greedily decode up to `rollout` tokens and lens over
+    # prompt+continuation. Each grid column only attends to positions before it
+    # (causal), so forcing the model's own answer in doesn't leak anything
+    # backwards — it just gives every generated token its own column to watch
+    # form with depth.
+    input_ids = _decode_rollout(model, input_ids, rollout)
     if rollout:
         enc = {"input_ids": input_ids, "attention_mask": torch.ones_like(input_ids)}
 
@@ -275,33 +317,142 @@ def lens_report(
 
 
 @torch.no_grad()
+def reason_events(model, tok, text: str, max_new: int = 512,
+                  temperature: float = 0.0, seed: int | None = None):
+    """Stream a decode as lens events: one dict per generated token, carrying
+    the classic-lens ladder of the column that produced it.
+
+    ``temperature`` > 0 samples instead of taking the argmax (Qwen3's thinking
+    mode is meant to be sampled — greedy ruminates). Sampling is seeded and the
+    seed is reported in the meta event, so a run can be replayed exactly. The
+    reported ``p``/``bits`` are ALWAYS the model's true (unscaled) probability
+    of the emitted token — temperature picks the path, never the price.
+
+    The ladder is nearly free during decode — the incremental forward already
+    has every rung's hidden state for the newest position, so each rung costs
+    one unembed matmul (batched across rungs below). The J-lens is NOT
+    streamed: at a JVP per rung per token it would dominate generation;
+    clients drill into a chosen column with /column instead.
+
+    Events:
+      {"event": "meta", tokens, ids, layers, uniform, n_prompt, temperature, seed}
+      {"event": "tok", pos, id, t, p, bits, rtop}   # pos: index in full sequence
+      {"event": "done", reason: "eos" | "budget"}
+
+    ``bits[r]`` is −log₂ p_rung(emitted token). ``rtop[r]`` is each rung's own
+    top-1, the streamed grid column. ``ids`` + per-token ``id`` let clients
+    hand the exact sequence back to /column for drill-ins — no re-decode.
+    """
+    device = next(model.parameters()).device
+    enc = tok(text, return_tensors="pt")  # on CPU; validate before touching the GPU
+    input_ids = enc["input_ids"]
+    _preflight(model, input_ids, max_new)
+    input_ids = input_ids.to(device)
+    n_prompt = input_ids.shape[1]
+    final_norm, unembed = _final_norm_and_unembed(model)
+
+    eos = model.generation_config.eos_token_id
+    eos_ids = set(eos) if isinstance(eos, list) else {eos} if eos is not None else set()
+
+    n_blocks = len(_blocks(model))
+    layers = ["embed"] + [f"layer {i}" for i in range(n_blocks - 1)] + ["final"]
+    vocab = model.get_input_embeddings().num_embeddings
+
+    sampler = None
+    if temperature > 0:
+        if seed is None:
+            seed = int(torch.randint(0, 2**31 - 1, (1,)).item())
+        sampler = torch.Generator()  # CPU generator: device-independent replay
+        sampler.manual_seed(seed)
+
+    yield {
+        "event": "meta",
+        "tokens": [_clean(tok.decode([int(t)])) for t in input_ids[0]],
+        "ids": input_ids[0].tolist(),
+        "layers": layers,
+        "uniform": math.log2(vocab),
+        "n_prompt": n_prompt,
+        "temperature": temperature,
+        "seed": seed,
+    }
+
+    past = None
+    cur = input_ids
+    for step in range(max_new):
+        out = model(input_ids=cur, past_key_values=past, use_cache=True, output_hidden_states=True)
+        past = out.past_key_values
+        probs = out.logits[0, -1].float().softmax(-1)  # the TRUE distribution: prices come from here
+        if sampler is None:
+            next_id = int(probs.argmax())
+        else:
+            temp_probs = (out.logits[0, -1].float() / temperature).softmax(-1)
+            next_id = int(torch.multinomial(temp_probs.cpu(), 1, generator=sampler).item())
+
+        # One decode for every rung at once: stack the newest position's hidden
+        # state per rung, final-norm all but the already-normed last one.
+        hs = torch.stack([h[0, -1] for h in out.hidden_states])
+        normed = torch.cat([final_norm(hs[:-1]), hs[-1:]])
+        rung_probs = unembed(normed).float().softmax(-1)  # [n_rungs, vocab]
+        tgt = rung_probs[:, next_id].clamp_min(1e-30)
+        bits = (-tgt.log() / LN2).tolist()
+        rtop = [_clean(tok.decode([int(i)])) for i in rung_probs.argmax(-1)]
+
+        yield {
+            "event": "tok",
+            "pos": n_prompt + step,
+            "id": next_id,
+            "t": _clean(tok.decode([next_id])),
+            "p": float(probs[next_id]),
+            "bits": [round(b, 3) for b in bits],
+            "rtop": rtop,
+        }
+        if next_id in eos_ids:
+            yield {"event": "done", "reason": "eos"}
+            return
+        cur = torch.tensor([[next_id]], device=device)
+    yield {"event": "done", "reason": "budget"}
+
+
+@torch.no_grad()
 def column_report(
-    model, tok, text: str, pos: int, top_k: int = 5, jlens: bool = True, rollout: int = 0
+    model, tok, text: str, pos: int, top_k: int = 5, jlens: bool = True, rollout: int = 0,
+    ids: list[int] | None = None,
 ) -> ColumnReport:
     """The depth ladder at column ``pos`` of the (rollout-extended) sequence.
 
     /lens only carries the ladder for the last column — this recomputes it for
     any column the UI selects, at the cost of one forward pass plus (with
-    jlens) one JVP per rung. The rollout is re-decoded greedily, so the
-    extended sequence is identical to the one the main request lensed.
+    jlens) one JVP per rung.
+
+    ``ids`` is the preferred path: the caller hands over the exact token
+    sequence (e.g. a streamed /chat trace) and the ladder is measured against
+    the token that actually follows ``pos`` — correct even for sampled traces,
+    and immune to re-decode forks at near-ties. Without ``ids``, the rollout
+    is re-decoded greedily from the prompt, which reproduces the sequence only
+    for greedy traces (and even then bf16 near-ties can occasionally fork).
     """
     device = next(model.parameters()).device
-    enc = tok(text, return_tensors="pt")  # on CPU; validate before touching the GPU
-    input_ids = enc["input_ids"]
-    _preflight(model, input_ids, rollout)
-    input_ids = input_ids.to(device)
-
-    for _ in range(rollout):
-        step = model(input_ids=input_ids).logits[:, -1].argmax(-1, keepdim=True)
-        input_ids = torch.cat([input_ids, step], dim=1)
+    if ids is not None:
+        input_ids = torch.tensor([ids], dtype=torch.long)  # validate on CPU first
+        _preflight(model, input_ids, 0)
+        input_ids = input_ids.to(device)
+    else:
+        enc = tok(text, return_tensors="pt")  # on CPU; validate before touching the GPU
+        input_ids = enc["input_ids"]
+        _preflight(model, input_ids, rollout)
+        input_ids = input_ids.to(device)
+        input_ids = _decode_rollout(model, input_ids, rollout)
 
     seq_len = input_ids.shape[1]
     if not 0 <= pos < seq_len:
         raise ValueError(f"pos {pos} is out of range for {seq_len} tokens.")
 
+    # With the sequence in hand, the followed token is known — measure that.
+    target_id = int(input_ids[0, pos + 1]) if ids is not None and pos + 1 < seq_len else None
+
     out = model(input_ids=input_ids, output_hidden_states=True)
     pred, bits, jbits, jtop = _ladder(
-        model, tok, input_ids, out, out.hidden_states, pos, top_k, jlens
+        model, tok, input_ids, out, out.hidden_states, pos, top_k, jlens, target_id=target_id
     )
     return ColumnReport(pos=pos, pred=pred, bits=bits, jbits=jbits, jtop=jtop,
                         uniform=math.log2(out.logits.shape[-1]))

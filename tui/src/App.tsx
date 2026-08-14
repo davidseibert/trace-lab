@@ -14,6 +14,7 @@ import { LensGrid } from "./components/LensGrid";
 import { Readout } from "./components/Readout";
 import { StatusBar } from "./components/StatusBar";
 import { TopBar } from "./components/TopBar";
+import { publishState } from "./spectate";
 import { theme } from "./theme";
 
 const DEFAULT_PROMPT = "The Eiffel Tower is in the city of";
@@ -134,6 +135,26 @@ export function App() {
       : col && col.pos === pos
         ? { pred: col.pred, bits: col.bits, jbits: col.jbits, jtop: col.jtop }
         : null;
+
+  // Mirror the whole view into the spectate sidecar so an MCP observer sees
+  // what the user sees: the request, the response, and the current selection.
+  useEffect(() => {
+    publishState({
+      view: { model, prompt, jlens, rollout, rung, pos, focus, loading, message, device },
+      selection: resp
+        ? {
+            layer: resp.layers[rung] ?? null,
+            token: resp.tokens[pos] ?? null,
+            isRollout: pos >= resp.n_prompt,
+            cellTopK: resp.grid[rung]?.[pos] ?? null,
+            // The depth ladder at the selected column; null while the lazy
+            // /column fetch for a non-final column is still in flight.
+            ladder,
+          }
+        : null,
+      resp,
+    });
+  }, [model, prompt, jlens, rollout, rung, pos, focus, loading, message, device, resp, ladder]);
 
   useKeyboard((key) => {
     if (key.name === "tab") {

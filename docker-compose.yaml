@@ -103,6 +103,13 @@ services:
       target: tui
     environment:
       LENS_ENGINE: ${LENS_ENGINE:-http://engine-gpu:5181}
+      # The spectate sidecar (tui/src/spectate.ts) must bind all interfaces for
+      # the port mapping to reach it; the MCP bridge on the host reads it at
+      # 127.0.0.1:5182. `compose run` skips port mappings unless given
+      # --service-ports, which `make tui` passes.
+      TUI_SPECTATE_HOST: 0.0.0.0
+    ports:
+      - "${TUI_SPECTATE_PORT:-5182}:5182"
     stdin_open: true
     tty: true
 
