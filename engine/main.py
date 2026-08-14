@@ -32,6 +32,40 @@ from lens import (ablate_report, attn_report, column_report, lens_report, load_m
 # The Qwen3-0.6B pair mirrors Raschka's *Build a Reasoning Model from Scratch*
 # checkpoints: his base/reasoning .pth files are repackagings of these exact
 # weights, so lensing these = lensing the book's models.
+#
+# Four architecture families are represented on purpose — the lens is only
+# interesting if you can watch the SAME reading change shape across them:
+#   GPT-2   (transformer.h / ln_f, fused c_attn)
+#   Qwen    (model.layers / model.norm, split q/k/v)
+#   Gemma 3 (same Llama-shaped paths; tied embeddings, sliding-window layers)
+#   Llama   (Llama-3.2 and SmolLM2 are both LlamaForCausalLM, but with very
+#            different vocabs — 128k vs 49k — so `uniform`, the knows-nothing
+#            reference cost, differs by ~1.4 bits between them. Same shape,
+#            different bits axis: a good control pair.)
+#
+# Two base/instruct pairs are here on purpose — Qwen3-0.6B-Base/0.6B and
+# Llama-3.2-1B/1B-Instruct. Same weights before and after post-training, so the
+# ladder difference between them IS the instruction tuning.
+#
+# DeepSeek-R1-Distill is the second model that actually emits a <think> block.
+# Both it and Qwen3 have dedicated marker tokens (151648/9 and 151667/8), but
+# R1's chat template PRE-OPENS <think> in the prompt, so the opening marker
+# never appears in the generated stream at all — an "is this token <think>?"
+# test leaves the region closed for the whole trace. TraceView.svelte therefore
+# scans for the markers in text space and seeds the state from the prompt.
+#
+# meta-llama/* is licence-gated: it needs an accepted licence on the HF account
+# AND an HF_TOKEN in the engine's environment (docker-compose passes one
+# through). Without the token these 404/403 at load time, not at import.
+#
+# Two deliberate exclusions, both of which LOOK like obvious additions:
+#   * Gemma 2 — final_logit_softcapping=30.0. The lens decodes rungs through
+#     unembed(final_norm(h)), which bypasses the cap, while `pred` comes from
+#     out.logits, which has it applied. The two would be measured on different
+#     scales and the top rung would stop agreeing with the prediction by
+#     construction. Gemma 3 dropped softcapping, which is why it's here instead.
+#   * Phi-3 / Phi-4-mini — fused qkv_proj, so attn_report's v_proj hook fails
+#     the same way GPT-2's does.
 ALLOWED_MODELS = [
     "gpt2",
     "gpt2-medium",
@@ -39,6 +73,13 @@ ALLOWED_MODELS = [
     "Qwen/Qwen2.5-0.5B",
     "Qwen/Qwen3-0.6B-Base",
     "Qwen/Qwen3-0.6B",
+    "Qwen/Qwen3-1.7B",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+    "google/gemma-3-270m-it",
+    "google/gemma-3-1b-it",
+    "meta-llama/Llama-3.2-1B",
+    "meta-llama/Llama-3.2-1B-Instruct",
+    "HuggingFaceTB/SmolLM2-1.7B-Instruct",
 ]
 
 # `make tui MODEL=...` / `LENS_MODEL` can name a model that isn't on the list
@@ -117,8 +158,14 @@ app.add_middleware(
 # load stays on the GPU -- and once VRAM fills, Windows/WDDM spills into shared
 # system memory and the whole machine hitches for seconds. So LRU-evict the
 # least-recently-used model and hand its VRAM back before loading a new one.
-# The local/add-* models are tiny; raise LENS_MAX_RESIDENT on a big card if you
-# want gpt2 / medium / large / Qwen all pinned at once.
+# Measured peak VRAM, bf16, short prompt (RTX 4080 Laptop, 12 GB):
+#   gemma-3-270m 0.85 · gemma-3-1b 2.5 · Llama-3.2-1B 2.8 · SmolLM2-1.7B 3.4 ·
+#   Qwen3-1.7B 3.8 GiB
+# So the default of 3 is fine for any mix that includes a small model, but THREE
+# 1.7B-class models at once is ~11 GiB against ~10.5 GiB free once the desktop
+# has its share — which is exactly the WDDM spill described above. Set
+# LENS_MAX_RESIDENT=2 if you're hopping between the big ones. attn_report costs
+# extra on top: eager attention materializes [heads, seq, seq] per layer.
 MAX_RESIDENT = max(1, int(os.environ.get("LENS_MAX_RESIDENT", "3")))
 _cache: "OrderedDict[str, tuple]" = OrderedDict()
 

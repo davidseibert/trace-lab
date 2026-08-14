@@ -56,7 +56,7 @@ export const LENSES: LensMeta[] = [
     kind: 'instrument',
     engine: true,
     blurb:
-      'The classic logit lens + J-lens over real GPT-2 / Qwen, in bits — watch the prediction crystallize with depth.',
+      'The classic logit lens + J-lens over real GPT-2, Qwen, Gemma 3 and Llama, in bits — watch the prediction crystallize with depth, and compare how differently each family gets there.',
     seeAlso: ['llm', 'train', 'reason']
   },
   {
@@ -65,7 +65,7 @@ export const LENSES: LensMeta[] = [
     kind: 'instrument',
     engine: true,
     blurb:
-      'Stream a Qwen3 thinking trace live: per-token code length, depth ladders, attention, and Δbits ablation of the think block.',
+      'Stream a thinking trace live from Qwen3 or DeepSeek-R1: per-token code length, depth ladders, attention, and Δbits ablation of the think block. Any chat model streams here — the plain instruct ones just give you the trace without the thinking.',
     seeAlso: ['logit', 'attn', 'coder']
   },
   {

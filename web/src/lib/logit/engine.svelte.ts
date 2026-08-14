@@ -9,13 +9,24 @@
  */
 import { fetchHealth, type ModelInfo } from './api';
 
-/** Shown before the first successful /health so pickers aren't empty. */
+/** Shown before the first successful /health so pickers aren't empty. Mirrors
+ * ALLOWED_MODELS in engine/main.py — /health overwrites it the moment the
+ * engine answers, so this only has to be right enough to render a picker
+ * offline. Keep the two in step when adding a model. */
 const FALLBACK: ModelInfo[] = [
   { name: 'gpt2', kind: 'hub' },
   { name: 'gpt2-medium', kind: 'hub' },
   { name: 'gpt2-large', kind: 'hub' },
   { name: 'Qwen/Qwen2.5-0.5B', kind: 'hub' },
-  { name: 'Qwen/Qwen3-0.6B', kind: 'hub' }
+  { name: 'Qwen/Qwen3-0.6B-Base', kind: 'hub' },
+  { name: 'Qwen/Qwen3-0.6B', kind: 'hub' },
+  { name: 'Qwen/Qwen3-1.7B', kind: 'hub' },
+  { name: 'deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B', kind: 'hub' },
+  { name: 'google/gemma-3-270m-it', kind: 'hub' },
+  { name: 'google/gemma-3-1b-it', kind: 'hub' },
+  { name: 'meta-llama/Llama-3.2-1B', kind: 'hub' },
+  { name: 'meta-llama/Llama-3.2-1B-Instruct', kind: 'hub' },
+  { name: 'HuggingFaceTB/SmolLM2-1.7B-Instruct', kind: 'hub' }
 ];
 
 export class EngineStore {

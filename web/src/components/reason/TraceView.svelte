@@ -34,16 +34,84 @@
   /** 0..1 heat: ~8 bits (p ≈ 0.4%) saturates. */
   const heat = (s: ReasonTok) => Math.min(1, surp(s) / 8);
 
-  // Think-region membership per token, by matching Qwen3's dedicated tokens.
-  const inThink = $derived.by(() => {
-    let open = false;
-    return steps.map((s) => {
-      if (s.t === '<think>') open = true;
-      const v = open;
-      if (s.t === '</think>') open = false;
-      return v;
-    });
+  /**
+   * Think-region membership per token.
+   *
+   * Token IDENTITY can't be the test. Qwen3 and DeepSeek-R1-Distill both have
+   * dedicated marker tokens (151667/8 and 151648/9), so `s.t === '<think>'`
+   * looks like it should work — but R1's chat template PRE-OPENS <think> at the
+   * end of the prompt. The opening marker is therefore never generated, the
+   * flag never flips, and a 220-token reasoning trace renders as entirely
+   * un-thought (measured: 0 tokens shaded before this change, 89 after).
+   *
+   * So work in TEXT space: concatenate the trace, find the markers in the
+   * string, and seed the state from the prompt. This also stops caring whether
+   * a model spells the markers as one token or several, which is not
+   * guaranteed across reasoning models. A token counts as in-think if any part
+   * of it overlaps an open region; the markers themselves are included,
+   * matching the old behaviour.
+   */
+  const OPEN = '<think>';
+  const CLOSE = '</think>';
+
+  /** The trace as one string, plus each token's character offset into it. */
+  const laid = $derived.by(() => {
+    const starts: number[] = [];
+    let off = 0;
+    for (const s of steps) {
+      starts.push(off);
+      off += s.t.length;
+    }
+    return { starts, text: steps.map((s) => s.t).join('') };
   });
+
+  /** Did the TEMPLATE already open a think block before the trace began?
+   * R1's chat template ends with '<think>\n', so generation starts mid-thought
+   * and the opening marker never appears in `steps` at all. */
+  const prefixOpen = $derived.by(() => {
+    if (!prefix) return false;
+    const p = prefix.map((x) => x.t).join('');
+    return p.lastIndexOf(OPEN) > p.lastIndexOf(CLOSE);
+  });
+
+  /** Character ranges: `think` = shaded regions, `marks` = the markers alone. */
+  const regions = $derived.by(() => {
+    const text = laid.text;
+    const think: [number, number][] = [];
+    const marks: [number, number][] = [];
+    let open = prefixOpen;
+    let start = open ? 0 : -1;
+    let i = 0;
+    while (i < text.length) {
+      if (open) {
+        const c = text.indexOf(CLOSE, i);
+        if (c === -1) break; // still thinking when the trace ends
+        marks.push([c, c + CLOSE.length]);
+        think.push([start, c + CLOSE.length]);
+        open = false;
+        i = c + CLOSE.length;
+      } else {
+        const o = text.indexOf(OPEN, i);
+        if (o === -1) break; // no further think blocks
+        marks.push([o, o + OPEN.length]);
+        start = o;
+        open = true;
+        i = o + OPEN.length;
+      }
+    }
+    if (open) think.push([start, text.length]);
+    return { think, marks };
+  });
+
+  const overlaps = (rs: [number, number][], a: number, b: number) =>
+    rs.some(([x, y]) => a < y && b > x);
+  const span = (i: number): [number, number] => [
+    laid.starts[i],
+    laid.starts[i] + steps[i].t.length
+  ];
+
+  const inThink = $derived(steps.map((_s, i) => overlaps(regions.think, ...span(i))));
+  const isMarker = $derived(steps.map((_s, i) => overlaps(regions.marks, ...span(i))));
 
   /**
    * Split a token for rendering. Buttons are atomic inline-blocks, so a
@@ -71,7 +139,7 @@
   {#each steps as s, i (s.pos)}{@const p = split(s.t)}{p.lead}<button
       class="tok"
       class:think={inThink[i]}
-      class:marker={s.t === '<think>' || s.t === '</think>'}
+      class:marker={isMarker[i]}
       class:break={p.isBreak}
       class:sel={i === selected}
       class:unrevealed={i > reveal}
