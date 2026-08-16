@@ -1,21 +1,21 @@
 /**
- * Post-hoc measurement over a finished Tic·tac training run — everything here
- * replays snapshotted weights through makeForward; trainTrace itself is never
- * touched. Three families of readout, all checked against game.ts truth:
+ * Post-hoc measurement over a finished Tic·tac run — architecture-agnostic:
+ * everything reads the TicRun adapter surface (probsAt / unitsAt / sparsity),
+ * so the same metrics price a causal GPT, a board encoder, and an MLP without
+ * knowing which is which. Three families of readout, all checked against
+ * game.ts truth:
  *
  *  - training curves: optimal-move agreement, bits vs the optimal set, and the
  *    D₄ policy-equivariance error, sampled every N steps on a fixed probe suite;
- *  - circuit readouts: weight-magnitude sparsity (the circuits-repo recipe —
- *    L1 during training, threshold only at inspection), FFN-unit × ground-truth-
- *    feature Pearson correlations, and a 2-PC embedding projection;
- *  - a replay handle (viz + bits ladder at any step, for any board).
+ *  - circuit readouts: unit × ground-truth-feature Pearson correlations and a
+ *    2-PC projection (weight sparsity itself lives on TicRun, where the
+ *    per-arch parameter layout is known);
+ *  - the probe suite itself: seeded, deduped, solver-labeled positions.
  */
 
-import { mulberry32, randInt, type Rng } from '../llm/rng';
-import { MiniGPT, loadParams, type ForwardViz } from '../llm/model';
+import { mulberry32, randInt } from '../llm/rng';
 import type { TensorSnap } from '../llm/tensor';
-import { logitLens, type LensReport } from '../llm/lens';
-import { makeForward, type TrainRun } from '../llm/trainTrace';
+import type { TicRun } from './ticTrain';
 import {
   analyze,
   boardFromMoves,
@@ -48,7 +48,8 @@ export const SPARSITY_THRESHOLD = 0.01;
 /**
  * A fixed, seeded, deduped set of non-terminal positions spread over plies
  * 0..7, harvested from mixed-policy games. Deterministic given the seed, so a
- * URL reproduces the exact metric numbers.
+ * URL reproduces the exact metric numbers. Deliberately includes positions no
+ * optimal game visits — agreement measures generalization, not memorization.
  */
 export function buildProbeSuite(seed: number, n: number = SUITE_SIZE): ProbePosition[] {
   const rng = mulberry32(seed + 1000);
@@ -70,24 +71,22 @@ export function buildProbeSuite(seed: number, n: number = SUITE_SIZE): ProbePosi
   return out;
 }
 
-/** Token ids for a move list: '·' (id 0) then cell tokens (cell + 1). */
-export const gameIds = (moves: number[]): number[] => [0, ...moves.map((m) => m + 1)];
-
 /**
- * The model's policy at a position: probs at the last input position, kept on
- * legal cells and renormalized. `illegalMass` is the raw mass the model put
- * on occupied cells and '·' — the "does it know the rules" number.
+ * The model's policy at a position: 10-wide token probs from the run, kept on
+ * legal cells and renormalized. `illegalMass` is the raw mass on occupied
+ * cells and '·' — the "does it know the rules" number (board archs never emit
+ * '·', but occupied-cell mass stays meaningful for them).
  */
 export function policyAt(
-  fwd: (step: number, ids: number[]) => ForwardViz,
+  run: TicRun,
   step: number,
   p: ProbePosition
 ): { pi: Float64Array; illegalMass: number } {
-  const viz = fwd(step, gameIds(p.moves));
+  const probs = run.probsAt(step, p.moves);
   const pi = new Float64Array(9);
   let legalSum = 0;
   for (const m of p.legal) {
-    pi[m] = viz.probs[m + 1];
+    pi[m] = probs[m + 1];
     legalSum += pi[m];
   }
   if (legalSum > 0) for (const m of p.legal) pi[m] /= legalSum;
@@ -99,20 +98,15 @@ export function policyAt(
  * TV distance between the pullback g⁻¹·π(g·s) and π(s), both legal-renormalized.
  * 0 = the policy commutes with the board symmetry.
  */
-export function equivError(
-  fwd: (step: number, ids: number[]) => ForwardViz,
-  step: number,
-  p: ProbePosition,
-  g: number
-): number {
-  const base = policyAt(fwd, step, p).pi;
+export function equivError(run: TicRun, step: number, p: ProbePosition, g: number): number {
+  const base = policyAt(run, step, p).pi;
   const gp: ProbePosition = {
     moves: transformMoves(g, p.moves),
     board: transformBoard(g, p.board),
     legal: transformMoves(g, p.legal),
     optimal: transformMoves(g, p.optimal)
   };
-  const trans = policyAt(fwd, step, gp).pi;
+  const trans = policyAt(run, step, gp).pi;
   let tv = 0;
   for (const m of p.legal) tv += Math.abs(trans[TRANSFORMS[g][m]] - base[m]);
   return tv / 2;
@@ -130,33 +124,26 @@ export interface MetricsPoint {
   equivariance: number;
   /** Fraction of all params with |w| < SPARSITY_THRESHOLD. */
   sparsity: number;
-  /** Mean raw probability mass on illegal moves and '·'. */
+  /** Mean raw probability mass on illegal moves (and '·', for the gpt arm). */
   illegalMass: number;
 }
 
-export function computeMetrics(run: TrainRun, suite: ProbePosition[], every = 10): MetricsPoint[] {
-  const fwd = makeForward(run);
+export function computeMetrics(run: TicRun, suite: ProbePosition[], every = 10): MetricsPoint[] {
   const out: MetricsPoint[] = [];
   const last = run.steps.length - 1;
   for (let step = 0; step <= last; step += every) {
-    const idx = step; // sample every N plus always the final step below
-    out.push(pointAt(run, fwd, suite, idx));
-    if (idx !== last && idx + every > last) out.push(pointAt(run, fwd, suite, last));
+    out.push(pointAt(run, suite, step));
+    if (step !== last && step + every > last) out.push(pointAt(run, suite, last));
   }
   return out;
 }
 
-function pointAt(
-  run: TrainRun,
-  fwd: (step: number, ids: number[]) => ForwardViz,
-  suite: ProbePosition[],
-  step: number
-): MetricsPoint {
+function pointAt(run: TicRun, suite: ProbePosition[], step: number): MetricsPoint {
   let agree = 0;
   let bits = 0;
   let illegal = 0;
   for (const p of suite) {
-    const { pi, illegalMass } = policyAt(fwd, step, p);
+    const { pi, illegalMass } = policyAt(run, step, p);
     illegal += illegalMass;
     let arg = p.legal[0];
     for (const m of p.legal) if (pi[m] > pi[arg]) arg = m;
@@ -167,11 +154,7 @@ function pointAt(
   }
   let equiv = 0;
   const sub = suite.slice(0, EQUIV_SUB);
-  for (const p of sub) for (let g = 1; g < 8; g++) equiv += equivError(fwd, step, p, g);
-
-  const w = run.weights[step];
-  let small = 0;
-  for (let i = 0; i < w.length; i++) if (Math.abs(w[i]) < SPARSITY_THRESHOLD) small++;
+  for (const p of sub) for (let g = 1; g < 8; g++) equiv += equivError(run, step, p, g);
 
   return {
     step,
@@ -179,7 +162,7 @@ function pointAt(
     agreement: agree / suite.length,
     bitsVsOptimal: bits / suite.length,
     equivariance: equiv / (sub.length * 7),
-    sparsity: small / w.length,
+    sparsity: run.sparsity(step, SPARSITY_THRESHOLD).frac,
     illegalMass: illegal / suite.length
   };
 }
@@ -190,8 +173,8 @@ function pointAt(
 
 /** Names for the 26 ground-truth features, aligned with groundTruthFeatures. */
 export const FEATURE_NAMES: string[] = [
-  ...LINES.map((l, i) => `X·line ${l.join('')}`),
-  ...LINES.map((l, i) => `O·line ${l.join('')}`),
+  ...LINES.map((l) => `X·line ${l.join('')}`),
+  ...LINES.map((l) => `O·line ${l.join('')}`),
   'to move',
   ...[...Array(9).keys()].map((c) => `cell ${c}`)
 ];
@@ -220,27 +203,19 @@ export function groundTruthFeatures(p: ProbePosition): Float64Array {
   return f;
 }
 
-/** Pearson r of each FFN hidden unit's last-position activation against each
- * ground-truth feature, across the suite → [ffnHid, 26] for ActGrid. */
-export function unitFeatureCorrelation(
-  fwd: (step: number, ids: number[]) => ForwardViz,
-  step: number,
-  suite: ProbePosition[],
-  ffnHid: number
-): TensorSnap {
+/** Pearson r of each hidden unit's per-position scalar (run.unitsAt) against
+ * each ground-truth feature, across the suite → [nUnits, 26] for ActGrid. */
+export function unitFeatureCorrelation(run: TicRun, step: number, suite: ProbePosition[]): TensorSnap {
   const n = suite.length;
-  const acts: Float64Array[] = []; // per position: [ffnHid]
+  const nUnits = run.meta.nUnits;
+  const acts: Float64Array[] = [];
   const feats: Float64Array[] = [];
   for (const p of suite) {
-    const viz = fwd(step, gameIds(p.moves));
-    const T = viz.ffnHidden.shape[0];
-    const row = new Float64Array(ffnHid);
-    for (let u = 0; u < ffnHid; u++) row[u] = viz.ffnHidden.data[(T - 1) * ffnHid + u];
-    acts.push(row);
+    acts.push(run.unitsAt(step, p.moves));
     feats.push(groundTruthFeatures(p));
   }
-  const data = new Float64Array(ffnHid * 26);
-  for (let u = 0; u < ffnHid; u++) {
+  const data = new Float64Array(nUnits * 26);
+  for (let u = 0; u < nUnits; u++) {
     for (let k = 0; k < 26; k++) {
       data[u * 26 + k] = pearson(
         acts.map((a) => a[u]),
@@ -249,7 +224,7 @@ export function unitFeatureCorrelation(
       );
     }
   }
-  return { data, shape: [ffnHid, 26] };
+  return { data, shape: [nUnits, 26] };
 }
 
 function pearson(xs: number[], ys: number[], n: number): number {
@@ -275,65 +250,8 @@ function pearson(xs: number[], ys: number[], n: number): number {
   return den < 1e-12 ? 0 : sxy / den;
 }
 
-export interface SparsityReport {
-  /** Fraction of all params below the threshold. */
-  frac: number;
-  /** FFN hidden units with at least one surviving inbound AND outbound edge. */
-  liveUnits: number;
-  /** Total surviving FFN edges (fc1 + fc2). */
-  edges: number;
-}
-
-/**
- * The circuits-repo readout: threshold |w|, count what survives. Works on the
- * flat snapshot; fc1/fc2 offsets are located from the run's config using the
- * flattenParams ordering (tokEmb, posEmb, block[ln1, attn(wq,wk,wv,wo ×(w,b)),
- * ln2, ffn(fc1 w,b, fc2 w,b)], lnFinal, head) — rather than hardcoding offsets
- * we scan for the two FFN-shaped segments by size, which is stable as long as
- * no other param shares those exact sizes (true for this config).
- */
-export function sparsityReport(
-  run: TrainRun,
-  weights: Float64Array,
-  threshold: number
-): SparsityReport {
-  let small = 0;
-  for (let i = 0; i < weights.length; i++) if (Math.abs(weights[i]) < threshold) small++;
-
-  // Locate fc1 [D, F] and fc2 [F, D] inside the flat vector by replaying
-  // param order on a throwaway model — exact, no size-scanning ambiguity.
-  const model = new MiniGPT(run.cfg, mulberry32(1));
-  const params = model.params();
-  const D = run.cfg.embDim;
-  const F = run.cfg.ffnHid;
-  let off = 0;
-  let fc1: { off: number } | null = null;
-  let fc2: { off: number } | null = null;
-  for (const p of params) {
-    const [r, c] = p.shape.length === 2 ? p.shape : [1, p.shape[0]];
-    if (r === D && c === F && !fc1) fc1 = { off };
-    else if (r === F && c === D && !fc2) fc2 = { off };
-    off += p.data.length;
-  }
-  if (!fc1 || !fc2) return { frac: small / weights.length, liveUnits: 0, edges: 0 };
-
-  let edges = 0;
-  let live = 0;
-  for (let u = 0; u < F; u++) {
-    let inn = 0;
-    let out = 0;
-    for (let d = 0; d < D; d++) {
-      if (Math.abs(weights[fc1.off + d * F + u]) >= threshold) inn++;
-      if (Math.abs(weights[fc2.off + u * D + d]) >= threshold) out++;
-    }
-    edges += inn + out;
-    if (inn > 0 && out > 0) live++;
-  }
-  return { frac: small / weights.length, liveUnits: live, edges };
-}
-
 /** Top-2 principal components by power iteration (deterministic start), for
- * the token-embedding scatter. Rows of `m` are points. */
+ * the token/cell-embedding scatter. Rows of `m` are points. */
 export function pca2(m: TensorSnap): { x: number; y: number }[] {
   const [n, d] = m.shape;
   const mean = new Float64Array(d);
@@ -347,7 +265,7 @@ export function pca2(m: TensorSnap): { x: number; y: number }[] {
     return s;
   };
   const powerIter = (deflate: Float64Array | null): Float64Array => {
-    let v = new Float64Array(d);
+    const v = new Float64Array(d);
     for (let j = 0; j < d; j++) v[j] = Math.sin(j + 1); // deterministic start
     for (let it = 0; it < 60; it++) {
       if (deflate) {
@@ -358,8 +276,9 @@ export function pca2(m: TensorSnap): { x: number; y: number }[] {
       const s = project(v);
       const nv = new Float64Array(d);
       for (let i = 0; i < n; i++) for (let j = 0; j < d; j++) nv[j] += X[i * d + j] * s[i];
-      let norm = Math.hypot(...nv);
-      if (norm < 1e-12) norm = 1;
+      let norm = 0;
+      for (let j = 0; j < d; j++) norm += nv[j] * nv[j];
+      norm = Math.sqrt(norm) || 1;
       for (let j = 0; j < d; j++) v[j] = nv[j] / norm;
     }
     return v;
@@ -371,35 +290,14 @@ export function pca2(m: TensorSnap): { x: number; y: number }[] {
   return [...Array(n).keys()].map((i) => ({ x: s1[i], y: s2[i] }));
 }
 
-// ---------------------------------------------------------------------------
-// Replay handle
-// ---------------------------------------------------------------------------
-
-export interface Replay {
-  viz(step: number, ids: number[]): ForwardViz;
-  lens(step: number, ids: number[]): LensReport;
-  /** The full token-embedding table [vocab, embDim] at a step — the PCA input. */
-  tokenTable(step: number): TensorSnap;
-}
-
-/** One reused model instance; every panel's on-demand "what did the net do at
- * step i on THIS board" goes through here. Simpler than makeLab — no facts. */
-export function makeReplay(run: TrainRun): Replay {
-  const model = new MiniGPT(run.cfg, mulberry32(1));
-  const viz = (step: number, ids: number[]): ForwardViz => {
-    loadParams(model, run.weights[step]);
-    model.forward(ids);
-    return model.viz!;
-  };
-  return {
-    viz,
-    lens(step, ids) {
-      viz(step, ids);
-      return logitLens(model);
-    },
-    tokenTable(step) {
-      loadParams(model, run.weights[step]);
-      return model.tokenEmb.weight.snapshot();
-    }
-  };
+/** KL(teacher ‖ student) over legal moves at a position, in bits — the house
+ * currency for "how far is the student from the teacher here". */
+export function klBits(teacher: TicRun, student: TicRun, p: ProbePosition): number {
+  const tq = policyAt(teacher, teacher.steps.length - 1, p).pi;
+  const sq = policyAt(student, student.steps.length - 1, p).pi;
+  let kl = 0;
+  for (const m of p.legal) {
+    if (tq[m] > 1e-12) kl += tq[m] * Math.log2(tq[m] / Math.max(sq[m], 1e-12));
+  }
+  return kl;
 }

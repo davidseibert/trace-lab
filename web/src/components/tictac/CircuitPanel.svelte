@@ -8,7 +8,7 @@
    * D₄ orbit structure (corners / edges / center) should appear geometrically.
    */
   import type { TensorSnap } from '../../lib/llm/tensor';
-  import type { SparsityReport } from '../../lib/tictac/metrics';
+  import type { SparsityReport } from '../../lib/tictac/ticTrain';
   import { TIC_COLORS } from '../../lib/tictac/dataset';
   import ActGrid from '../llm/ActGrid.svelte';
 

@@ -326,6 +326,32 @@ const SECTIONS: GuideSection[] = [
   },
   // ---- Tic·tac ---------------------------------------------------------------
   {
+    id: 'tictacarch',
+    title: 'the arch × signal grid',
+    items: [
+      {
+        ok: true,
+        text: 'Solver-soft targets are the SAME objective as sampled games with the sampling noise removed — the noiseless estimator. If the opening distribution stops wobbling across seeds under `solver`, that wobble was estimator variance, never model failure.'
+      },
+      {
+        ok: true,
+        text: 'The MLP is the null model: attention adds no capacity on a fully-observed 9-cell state. What the encoder can buy is weight sharing (symmetry learned once, in cell embeddings, instead of nine times) and READABLE pairwise structure. Compare the equivariance curves at matched params before crediting attention with anything.'
+      },
+      {
+        ok: true,
+        text: 'The encoder can attend to empty cells; the gpt arm cannot — no token exists for them, so its board state must emerge internally (the Othello-GPT condition). Same game, two different questions: explicit versus emergent representation.'
+      },
+      {
+        ok: false,
+        text: 'Distillation KL falling to ~0 means the student matches the teacher — errors included. Dark knowledge transfers blunders as faithfully as skill; judge the student against the SOLVER (agreement), not just the teacher (KL).'
+      },
+      {
+        ok: false,
+        text: 'A tempered teacher (T > 1) is not “more informative truth” — it is a design choice trading gradient signal for target entropy. Quote any distillation result together with its T.'
+      }
+    ]
+  },
+  {
     id: 'tictaccircuit',
     title: 'reading the circuit panel honestly',
     items: [

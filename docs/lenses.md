@@ -384,6 +384,37 @@ batch-1 SGD at this scale — it comes and goes with seed and steps, which is
 scrubbing-visible and is itself the exhibit; and ~3.2 bits of loss at ply 0
 is irreducible because all nine openings are minimax-optimal.
 
+**The arch × signal grid.** Two toggles turn the lens into an 8-cell
+experiment: `arch = gpt | encoder | mlp` × `signal = games | solver | distill`
+(gpt+distill excluded as self-distillation), all trained by one lens-local
+`ticTrain` whose `TicRun` adapter surface feeds every panel unchanged.
+
+- *Architectures* (parameter-matched ~5.5k): the causal **gpt** over move
+  sequences (board state must emerge — empty cells have no token, so
+  "attend to the threatened square" is unrepresentable); a bidirectional
+  **encoder** over the 9 cell tokens (a transformer encoder — attention can
+  touch empty cells, and the attention panel lets you click any cell's row,
+  e.g. "what does the block square look at?"); and the honest null model, a
+  one-hidden-layer **mlp** over the one-hot board (its attention panel says
+  so: "no attention — that's the point of this arm").
+- *Signals*: `games` = hard sampled targets (original); `solver` = SOFT
+  targets, uniform over minimax-optimal — the same objective with the
+  sampling noise removed, which cures the opening wobble (measured: the
+  gpt+solver ply-0 distribution flattens to 8–16% around uniform 11%, vs
+  24–44% spikes under `games`); `distill` = tempered soft targets
+  (`q^(1/T)` renorm) from a cached gpt+games teacher, with a
+  `KL(teacher‖student)` badge in bits and the teacher's bars alongside the
+  student's — where you can watch dark knowledge transfer the teacher's
+  blunders as faithfully as its skill.
+- *Measured findings from the first verification runs* (optimal corpus,
+  400/400, seeds 1–2): equivariance error **encoder 0.08 ≪ gpt ≈ mlp
+  0.24–0.32** at matched params and comparable agreement — attention added no
+  capacity, but the encoder's weight sharing (cell identity lives only in
+  position embeddings) bought D₄ symmetry ~3–4× more cheaply, plus 0% illegal
+  mass since legality is input, not inference. Under solver-soft + L1 the
+  encoder collapses to as little as 1/48 live units at 90% sparsity while
+  holding ~63% agreement — the low-description-length solution, found.
+
 ## Hopfield lenses — retrieval, energy, and the attention identity
 
 Two lenses for one paper — Ramsauer et al. 2020, *"Hopfield Networks is All

@@ -8,13 +8,16 @@
    */
   let {
     mass,
-    startMass,
+    startMass = 0,
+    showStart = true,
     cellPx = 34
   }: {
     /** Attention mass summed per cell (length 9). */
     mass: Float64Array;
     /** Mass on the '·' start token. */
-    startMass: number;
+    startMass?: number;
+    /** Board-encoder attention has no start token — hide the chip. */
+    showStart?: boolean;
     cellPx?: number;
   } = $props();
 
@@ -29,9 +32,11 @@
       </div>
     {/each}
   </div>
-  <div class="start chip mono" title="mass on the '·' start token — position 0 has no cell">
-    · {(startMass * 100).toFixed(0)}%
-  </div>
+  {#if showStart}
+    <div class="start chip mono" title="mass on the '·' start token — position 0 has no cell">
+      · {(startMass * 100).toFixed(0)}%
+    </div>
+  {/if}
 </div>
 
 <style>

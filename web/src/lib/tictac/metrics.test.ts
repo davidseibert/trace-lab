@@ -1,21 +1,46 @@
 import { describe, expect, it } from 'bun:test';
-import { trainTrace } from '../llm/trainTrace';
-import type { ForwardViz } from '../llm/model';
-import { tictacDataset } from './dataset';
-import { analyze, INVERSE, isTerminal, TRANSFORMS } from './game';
+import { ticTrain, gameIds, type TicRun } from './ticTrain';
+import { analyze, boardFromMoves, INVERSE, isTerminal, TRANSFORMS } from './game';
 import {
   buildProbeSuite,
   computeMetrics,
   equivError,
-  gameIds,
   groundTruthFeatures,
-  makeReplay,
+  klBits,
   pca2,
   policyAt,
-  sparsityReport,
   unitFeatureCorrelation,
   type ProbePosition
 } from './metrics';
+
+/** A minimal TicRun whose policy is the solver's uniform-over-optimal — a
+ * perfectly D₄-equivariant reference model (the solver is provably
+ * equivariant; game.test.ts pins that). */
+function solverRun(): TicRun {
+  const probsAt = (_step: number, moves: number[]): Float64Array => {
+    const b = boardFromMoves(moves);
+    const a = analyze(b);
+    const probs = new Float64Array(10);
+    for (const m of a.optimal) probs[m + 1] = 1 / a.optimal.length;
+    return probs;
+  };
+  return {
+    arch: 'mlp',
+    signal: 'solver',
+    steps: [{ index: 0, loss: 0 }],
+    weights: [new Float64Array(1)],
+    cfg: null,
+    meta: { nHeads: 0, nUnits: 1, paramCount: 1 },
+    probsAt,
+    unitsAt: () => new Float64Array(1),
+    vizAt: () => {
+      throw new Error('not needed');
+    },
+    lensAt: () => null,
+    tokenTable: () => ({ data: new Float64Array(9), shape: [9, 1] }),
+    sparsity: () => ({ frac: 0, liveUnits: 1, edges: 2 })
+  };
+}
 
 describe('probe suite', () => {
   const suite = buildProbeSuite(1);
@@ -40,25 +65,12 @@ describe('probe suite', () => {
   });
 });
 
-describe('equivariance metric', () => {
-  // A hand-built perfectly equivariant "model": uniform over the position's
-  // optimal moves, read from the solver (which is provably equivariant).
-  const solverFwd = (_step: number, ids: number[]): ForwardViz => {
-    const moves = ids.slice(1).map((t) => t - 1);
-    const board = moves.reduce(
-      (b, m, i) => ((b[m] = ((i % 2) + 1) as 1 | 2), b),
-      new Array(9).fill(0) as (0 | 1 | 2)[]
-    );
-    const a = analyze(board);
-    const probs = new Float64Array(10);
-    for (const m of a.optimal) probs[m + 1] = 1 / a.optimal.length;
-    return { probs } as unknown as ForwardViz;
-  };
-
+describe('equivariance metric (through the TicRun interface)', () => {
+  const run = solverRun();
   const suite = buildProbeSuite(2, 8);
 
   it('scores ≈ 0 for the solver policy', () => {
-    for (const p of suite) for (let g = 1; g < 8; g++) expect(equivError(solverFwd, 0, p, g)).toBeLessThan(1e-9);
+    for (const p of suite) for (let g = 1; g < 8; g++) expect(equivError(run, 0, p, g)).toBeLessThan(1e-9);
   });
 
   it('pullback indexing round-trips under INVERSE', () => {
@@ -66,18 +78,18 @@ describe('equivariance metric', () => {
       for (let m = 0; m < 9; m++) expect(TRANSFORMS[INVERSE[g]][TRANSFORMS[g][m]]).toBe(m);
   });
 
-  it('policyAt renormalizes over legal moves', () => {
+  it('policyAt renormalizes over legal moves and klBits(self, self) = 0', () => {
     const p = suite[0];
-    const { pi } = policyAt(solverFwd, 0, p);
+    const { pi } = policyAt(run, 0, p);
     let sum = 0;
     for (const m of p.legal) sum += pi[m];
     expect(sum).toBeCloseTo(1, 9);
+    expect(klBits(run, run, p)).toBeCloseTo(0, 9);
   });
 });
 
 describe('integration over a tiny real run', () => {
-  const ds = tictacDataset('mixed', 20, 1);
-  const run = trainTrace(ds, { steps: 21, seed: 1, l1Lambda: 0.001, evalSample: 10 });
+  const run = ticTrain({ arch: 'gpt', signal: 'games', kind: 'mixed', nGames: 20, steps: 21, seed: 1, l1Lambda: 0.001 });
   const suite = buildProbeSuite(1, 10);
 
   it('computeMetrics returns finite in-range points including the final step', () => {
@@ -97,30 +109,17 @@ describe('integration over a tiny real run', () => {
     }
   });
 
-  it('sparsityReport finds the FFN and behaves at extremes', () => {
-    const w = run.weights[run.weights.length - 1];
-    const rep = sparsityReport(run, w, 0.01);
-    expect(rep.liveUnits).toBeGreaterThan(0);
-    expect(rep.liveUnits).toBeLessThanOrEqual(run.cfg.ffnHid);
-    const zeros = sparsityReport(run, new Float64Array(w.length), 0.01);
-    expect(zeros.frac).toBe(1);
-    expect(zeros.liveUnits).toBe(0);
-    expect(zeros.edges).toBe(0);
-  });
-
-  it('unitFeatureCorrelation is [ffnHid, 26] with r in [-1, 1]', () => {
-    const replay = makeReplay(run);
-    const corr = unitFeatureCorrelation(replay.viz, run.steps.length - 1, suite, run.cfg.ffnHid);
-    expect(corr.shape).toEqual([run.cfg.ffnHid, 26]);
+  it('unitFeatureCorrelation is [nUnits, 26] with r in [-1, 1]', () => {
+    const corr = unitFeatureCorrelation(run, run.steps.length - 1, suite);
+    expect(corr.shape).toEqual([run.meta.nUnits, 26]);
     for (const r of corr.data) {
       expect(r).toBeGreaterThanOrEqual(-1.000001);
       expect(r).toBeLessThanOrEqual(1.000001);
     }
   });
 
-  it('pca2: PC1 variance ≥ PC2 variance', () => {
-    const replay = makeReplay(run);
-    const table = replay.tokenTable(run.steps.length - 1);
+  it('pca2: PC1 variance ≥ PC2 variance on the token table', () => {
+    const table = run.tokenTable(run.steps.length - 1);
     expect(table.shape).toEqual([10, 24]);
     const pts = pca2(table);
     const varOf = (sel: (p: { x: number; y: number }) => number) => {
@@ -131,10 +130,10 @@ describe('integration over a tiny real run', () => {
     expect(varOf((p) => p.x)).toBeGreaterThanOrEqual(varOf((p) => p.y) - 1e-9);
   });
 
-  it('makeReplay lens returns a 3-rung ladder', () => {
-    const replay = makeReplay(run);
-    const report = replay.lens(5, gameIds([0, 4, 1]));
+  it('lensAt returns a 3-rung ladder for the gpt arm', () => {
+    const report = run.lensAt(5, [0, 4, 1])!;
     expect(report.rungs.length).toBe(3);
     expect(report.uniformBits).toBeCloseTo(Math.log2(10), 6);
+    expect(gameIds([0, 4, 1])).toEqual([0, 1, 5, 2]);
   });
 });

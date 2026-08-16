@@ -257,6 +257,59 @@ export function maskedSoftmax(a: Tensor, T: number): Tensor {
   return out;
 }
 
+/**
+ * Full (bidirectional) row softmax over the last dimension — maskedSoftmax
+ * without the causal clamp, for encoder-style attention where every position
+ * may see every other. Same stable forward, same O(C)-per-row softmax JVP
+ * backward, same batched-rows handling.
+ */
+export function softmaxRows(a: Tensor): Tensor {
+  const C = a.shape[a.shape.length - 1];
+  const totalRows = a.data.length / C;
+  const out = new Tensor(new Float64Array(a.data.length), [...a.shape]);
+  for (let r = 0; r < totalRows; r++) {
+    const off = r * C;
+    let mx = -Infinity;
+    for (let c = 0; c < C; c++) mx = Math.max(mx, a.data[off + c]);
+    let s = 0;
+    for (let c = 0; c < C; c++) {
+      out.data[off + c] = Math.exp(a.data[off + c] - mx);
+      s += out.data[off + c];
+    }
+    for (let c = 0; c < C; c++) out.data[off + c] /= s;
+  }
+  out._children = [a];
+  out._op = 'softmaxRows';
+  out._backward = () => {
+    for (let r = 0; r < totalRows; r++) {
+      const off = r * C;
+      let dot = 0;
+      for (let j = 0; j < C; j++) dot += out.data[off + j] * out.grad[off + j];
+      for (let i = 0; i < C; i++) {
+        a.grad[off + i] += out.data[off + i] * (out.grad[off + i] - dot);
+      }
+    }
+  };
+  return out;
+}
+
+/**
+ * Metadata-only view: same data, new shape. The backward is a pass-through —
+ * gradients flow element-for-element. Lets a [9,1] per-cell readout feed a
+ * loss that expects [1,9] without copying.
+ */
+export function reshape(a: Tensor, shape: number[]): Tensor {
+  const n = shape.reduce((x, y) => x * y, 1);
+  if (n !== a.data.length) throw new Error(`reshape: ${a.data.length} elements into [${shape}]`);
+  const out = new Tensor(new Float64Array(a.data), [...shape]);
+  out._children = [a];
+  out._op = 'reshape';
+  out._backward = () => {
+    for (let i = 0; i < a.data.length; i++) a.grad[i] += out.grad[i];
+  };
+  return out;
+}
+
 /** Per-row layer normalisation with learned scale (gamma) and shift (beta). */
 export function layerNorm(a: Tensor, gamma: Tensor, beta: Tensor): Tensor {
   const T = a.shape[0];
@@ -381,6 +434,50 @@ export function crossEntropyLoss(logits: Tensor, targets: number[]): Tensor {
       for (let v = 0; v < V; v++) {
         const indicator = v === targets[t] ? 1 : 0;
         logits.grad[off + v] += (probs[off + v] - indicator) / T;
+      }
+    }
+  };
+  return out;
+}
+
+/**
+ * Cross-entropy against SOFT targets: loss = −(1/T)·Σₜ Σᵥ q·log p. This is
+ * what distillation and solver-soft training use — the target is a full
+ * distribution per position, not a class index. Reduces exactly to
+ * crossEntropyLoss when each q row is one-hot. Backward is the same
+ * softmax-log cancellation with the indicator replaced by q: (p − q)/T.
+ */
+export function softCrossEntropyLoss(logits: Tensor, q: Float64Array): Tensor {
+  const T = logits.shape[0];
+  const V = logits.shape[1];
+  if (q.length !== T * V) throw new Error(`softCrossEntropyLoss: q has ${q.length} entries, want ${T * V}`);
+  const probs = new Float64Array(logits.data.length);
+  let loss = 0;
+
+  for (let t = 0; t < T; t++) {
+    const off = t * V;
+    let mx = -Infinity;
+    for (let v = 0; v < V; v++) mx = Math.max(mx, logits.data[off + v]);
+    let s = 0;
+    for (let v = 0; v < V; v++) {
+      probs[off + v] = Math.exp(logits.data[off + v] - mx);
+      s += probs[off + v];
+    }
+    for (let v = 0; v < V; v++) probs[off + v] /= s;
+    for (let v = 0; v < V; v++) {
+      if (q[off + v] > 0) loss -= q[off + v] * Math.log(probs[off + v] + 1e-10);
+    }
+  }
+  loss /= T;
+
+  const out = new Tensor(new Float64Array([loss]), [1]);
+  out._children = [logits];
+  out._op = 'softCrossEntropy';
+  out._backward = () => {
+    for (let t = 0; t < T; t++) {
+      const off = t * V;
+      for (let v = 0; v < V; v++) {
+        logits.grad[off + v] += (probs[off + v] - q[off + v]) / T;
       }
     }
   };
