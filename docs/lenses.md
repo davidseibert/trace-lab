@@ -424,7 +424,11 @@ random baseline, and — with the engine up — real LLMs. Duels with seeded
 temperature sampling, a round-robin standings matrix, per-game replay (the
 mover's policy overlaid on the board, bits paid per move, "open in Tic·tac"),
 and a **report card**: the probe suite pointed at any player — agreement,
-bits vs optimal, D₄ equivariance, illegal mass, decisiveness.
+bits vs optimal, D₄ equivariance, illegal mass, decisiveness, and **blocks**
+(forced-block precision over a dedicated suite of unique-optimal blocking
+positions — the tactical column that predicts the round-robin's defense
+results; solvers score 100%, random ~33%, and at seed 1 the gpt arms hit
+50–58% while the most-symmetric encoder scores 21%, below chance).
 
 **LLM players are read, not sampled**: one `/next` forward per unique
 position (~50 ms), parsing the next-token distribution over the nine digit

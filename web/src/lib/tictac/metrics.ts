@@ -71,6 +71,26 @@ export function buildProbeSuite(seed: number, n: number = SUITE_SIZE): ProbePosi
   return out;
 }
 
+/** Defense distilled to a predicate: the optimal move is UNIQUE and it
+ * completes a block of an opponent two-in-a-row. These are the positions
+ * where the arena's defense column was decided (measured: the move-sequence
+ * GPT blocks ~69%, board-state archs ~30%). */
+export function isForcedBlock(p: ProbePosition): boolean {
+  if (p.optimal.length !== 1) return false;
+  const opp = toMove(p.board) === 1 ? 2 : 1;
+  return LINES.some(
+    (l) => l.includes(p.optimal[0]) && l.filter((c) => p.board[c] === opp).length === 2
+  );
+}
+
+/** A fixed, seeded suite of forced-block positions — the report card's
+ * tactical column. Harvested from the same generator as the probe suite
+ * (deterministic given the seed), filtered to blocks. */
+export function buildBlockSuite(seed: number, n = 24): ProbePosition[] {
+  // ~40% of generic probe positions are forced blocks, so 160 → plenty.
+  return buildProbeSuite(seed, 160).filter(isForcedBlock).slice(0, n);
+}
+
 /**
  * The model's policy at a position: 10-wide token probs from the run, kept on
  * legal cells and renormalized. `illegalMass` is the raw mass on occupied

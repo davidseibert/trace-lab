@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { mulberry32 } from '../llm/rng';
 import { emptyBoard, boardFromMoves } from './game';
-import { buildProbeSuite } from './metrics';
+import { buildBlockSuite, buildProbeSuite, isForcedBlock } from './metrics';
 import { ticTrain } from './ticTrain';
 import {
   defaultLlmMode,
@@ -107,12 +107,23 @@ describe('LLM plumbing (pure parts)', () => {
 });
 
 describe('report card', () => {
-  it('solver: perfect agreement, zero equivariance error, zero illegal', async () => {
-    const card = await reportCard(perfect, buildProbeSuite(3, 16));
+  it('block suite is deterministic and every position is a genuine forced block', () => {
+    const blocks = buildBlockSuite(3);
+    expect(blocks.length).toBe(24);
+    expect(buildBlockSuite(3).map((p) => p.moves)).toEqual(blocks.map((p) => p.moves));
+    for (const p of blocks) {
+      expect(p.optimal.length).toBe(1);
+      expect(isForcedBlock(p)).toBe(true);
+    }
+  });
+
+  it('solver: perfect agreement, zero equivariance error, zero illegal, all blocks', async () => {
+    const card = await reportCard(perfect, buildProbeSuite(3, 16), buildBlockSuite(3, 12));
     expect(card.agreement).toBe(1);
     expect(card.equivariance).toBeLessThan(1e-9);
     expect(card.illegalMass).toBeLessThan(1e-9);
     expect(card.decisiveness).toBeCloseTo(1, 9);
+    expect(card.blocks).toBe(1); // the solver never misses a forced block
   });
 
   it('toy player wraps a run and plays legal full games', async () => {
@@ -121,8 +132,10 @@ describe('report card', () => {
     const g = await playGame(toy, perfect, mulberry32(1), 0);
     expect([0, 1, 2]).toContain(g.winner);
     expect(g.winner).not.toBe(1); // nothing beats the solver
-    const card = await reportCard(toy, buildProbeSuite(3, 12));
+    const card = await reportCard(toy, buildProbeSuite(3, 12), buildBlockSuite(3, 8));
     expect(card.agreement).toBeGreaterThanOrEqual(0);
     expect(card.decisiveness).toBeCloseTo(1, 6);
+    expect(card.blocks).toBeGreaterThanOrEqual(0);
+    expect(card.blocks).toBeLessThanOrEqual(1);
   });
 });

@@ -4,7 +4,7 @@
   import { engine } from '../../lib/logit/engine.svelte';
   import { analyze, boardFromMoves, legalMoves, winner, type CorpusKind } from '../../lib/tictac/game';
   import { ticTrain, type Arch, type Signal, type TicRun } from '../../lib/tictac/ticTrain';
-  import { buildProbeSuite, type ProbePosition } from '../../lib/tictac/metrics';
+  import { buildBlockSuite, buildProbeSuite, type ProbePosition } from '../../lib/tictac/metrics';
   import {
     defaultLlmMode,
     llmPlayer,
@@ -221,10 +221,11 @@
     errMsg = '';
     try {
       const suite: ProbePosition[] = buildProbeSuite(seed);
+      const blockSuite: ProbePosition[] = buildBlockSuite(seed);
       const out: { id: string; card: ReportCard }[] = [];
       for (const id of roster) {
         const p = await buildPlayer(id);
-        const card = await reportCard(p, suite, (done, total) => {
+        const card = await reportCard(p, suite, blockSuite, (done, total) => {
           busy = `report ${playerLabel(id)} · ${done}/${total}`;
         });
         out.push({ id, card });
@@ -404,12 +405,13 @@
     <button class="ghost" onclick={runReport} disabled={!!busy}>▶ run report cards ({roster.length} players × probe suite)</button>
     {#if cards.length}
       <table class="mono rtable">
-        <thead><tr><th>player</th><th>agree</th><th>bits vs opt</th><th>equiv err</th><th>illegal</th><th>decisive</th></tr></thead>
+        <thead><tr><th>player</th><th>agree</th><th>blocks</th><th>bits vs opt</th><th>equiv err</th><th>illegal</th><th>decisive</th></tr></thead>
         <tbody>
           {#each cards as { id, card } (id)}
             <tr>
               <td class="pname">{playerLabel(id)}</td>
               <td>{(card.agreement * 100).toFixed(0)}%</td>
+              <td>{(card.blocks * 100).toFixed(0)}%</td>
               <td>{card.bitsVsOptimal.toFixed(2)}</td>
               <td>{card.equivariance.toFixed(3)}</td>
               <td>{(card.illegalMass * 100).toFixed(0)}%</td>
@@ -418,7 +420,7 @@
           {/each}
         </tbody>
       </table>
-      <div class="faint hint">agreement/bits/equivariance against the solved game over the {seed}-seeded probe suite · decisiveness = an LLM's next-token mass on ANY digit</div>
+      <div class="faint hint">agreement/bits/equivariance against the solved game over the {seed}-seeded probe suite · blocks = defense distilled: fraction of forced-block positions (unique optimal move parrying a two-in-a-row) where the argmax finds it — this column predicts the round-robin's O-side results · decisiveness = an LLM's next-token mass on ANY digit</div>
     {/if}
   </div>
 {/snippet}

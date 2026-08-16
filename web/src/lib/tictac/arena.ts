@@ -157,6 +157,10 @@ export interface ReportCard {
   /** Mean Σ of the raw returned probs — 1 for toys/oracles; an LLM's mass on
    * ANY digit at all (the rest went to off-task tokens). */
   decisiveness: number;
+  /** Fraction of forced-block positions (unique optimal move parrying an
+   * opponent two-in-a-row) where the argmax finds the block — the tactical
+   * column, and the one that predicts the round-robin's defense results. */
+  blocks: number;
 }
 
 async function policyAtP(player: TicPlayer, p: ProbePosition) {
@@ -185,10 +189,11 @@ export async function playerEquivError(player: TicPlayer, p: ProbePosition, g: n
 export async function reportCard(
   player: TicPlayer,
   suite: ProbePosition[],
+  blockSuite: ProbePosition[],
   onProgress?: (done: number, total: number) => void
 ): Promise<ReportCard> {
   const sub = suite.slice(0, EQUIV_SUB);
-  const total = suite.length + sub.length * 7;
+  const total = suite.length + sub.length * 7 + blockSuite.length;
   let done = 0;
   let agree = 0;
   let bits = 0;
@@ -213,11 +218,20 @@ export async function reportCard(
       onProgress?.(++done, total);
     }
   }
+  let blocked = 0;
+  for (const p of blockSuite) {
+    const { pi } = await policyAtP(player, p);
+    let arg = p.legal[0];
+    for (const m of p.legal) if (pi[m] > pi[arg]) arg = m;
+    if (arg === p.optimal[0]) blocked++;
+    onProgress?.(++done, total);
+  }
   return {
     agreement: agree / suite.length,
     bitsVsOptimal: bits / suite.length,
     equivariance: equiv / (sub.length * 7),
     illegalMass: illegal / suite.length,
-    decisiveness: decisive / suite.length
+    decisiveness: decisive / suite.length,
+    blocks: blockSuite.length ? blocked / blockSuite.length : 0
   };
 }

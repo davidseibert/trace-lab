@@ -338,6 +338,10 @@ const SECTIONS: GuideSection[] = [
         text: 'Trappy vs uniform solver is the tie-breaking exhibit: identical minimax optimality, different opponent model. Watch trappy convert more wins from random — and watch the two solvers draw each other forever.'
       },
       {
+        ok: true,
+        text: 'Blocks is defense distilled — positions where the unique optimal move parries a two-in-a-row — and it predicts the round-robin’s O-side column better than agreement does. Agreement rewards matching large optimal sets; blocks has no partial credit.'
+      },
+      {
         ok: false,
         text: 'Score against the perfect solver only measures “doesn’t lose” — wins against perfect play do not exist, so that column is really a draw rate.'
       },
