@@ -323,6 +323,77 @@ const SECTIONS: GuideSection[] = [
         text: 'One column is an anecdote. Before concluding, run a control: another topic in the same frame, another seed, or base vs chat on matched context — the deltas are the evidence.'
       }
     ]
+  },
+  // ---- Hopfield·retrieve ----------------------------------------------------
+  {
+    id: 'hopfieldread',
+    title: 'reading Hopfield·retrieve',
+    items: [
+      {
+        ok: true,
+        text: 'One modern update with the stored patterns as both keys and values is EXACTLY one row of softmax attention at β = 1/√d — same arithmetic as Attn·lab, no analogy. A head retrieves in one step because one step is already ε-close: that cliff in the energy chart is the paper’s one-step-convergence theorem, drawn.'
+      },
+      {
+        ok: true,
+        text: 'Metastable ≠ failure. When several patterns are close, the fixed point is their weighted average — that’s pooling / prototype formation, and it’s what many real attention heads do on purpose. Read the entropy badge (eff. patterns = 2^H), not just the picture.'
+      },
+      {
+        ok: true,
+        text: 'Low β doesn’t break the network, it changes the question: from “which pattern is this?” toward “what do my patterns have in common?”. The regime-vs-β chart is one memory answering three different questions.'
+      },
+      {
+        ok: false,
+        text: 'The energy is guaranteed to go downhill (CCCP), but downhill to the NEAREST fixed point — not necessarily the pattern you meant. A converged trace showing the wrong glyph is convergence working correctly on a bad query.'
+      },
+      {
+        ok: false,
+        text: 'Don’t read the classical net as merely broken: sign(Wξ) with Hebbian weights is the historical baseline whose failure modes — spurious mixtures, ~0.14·d capacity — are precisely what the lse energy fixes. The contrast is the content.'
+      }
+    ]
+  },
+  {
+    id: 'hopfieldheads',
+    title: 'reading Hopfield·heads',
+    items: [
+      {
+        ok: true,
+        text: 'γ rescales the softmax temperature without touching the weights: softmax(γ·z) = wᵞ/Σwᵞ from the row the model already computed. γ = 1 IS the model — every other γ is a counterfactual asking how close this head sits to a phase boundary.'
+      },
+      {
+        ok: true,
+        text: 'A sharp retrieval head at γ = 1 that stays sharp down to γ = 0.25 is robustly retrieving (well-separated patterns); one that melts immediately was barely deciding. Distance-to-boundary is the reading, not just the color at γ = 1.'
+      },
+      {
+        ok: false,
+        text: 'A “global” head is not a broken head — uniform averaging over context is a feature many heads are trained into (and the paper found most heads in middle layers metastable on purpose). Regime is a description, not a grade.'
+      },
+      {
+        ok: false,
+        text: 'This reads WHERE a head looks, not whether it mattered. Attention is not explanation: to claim the retrieved position mattered, ablate it (Reason·trace’s Δbits) — regimes only nominate candidates.'
+      },
+      {
+        ok: true,
+        text: 'The stored patterns here are the sequence’s own positions (keys), and the retrieval space is learned (W_Q/W_K ≠ identity) — this is the toy lens’s update run inside a projected space where keys ≠ values.'
+      }
+    ]
+  },
+  {
+    id: 'hopfieldcap',
+    title: 'reading the capacity panel',
+    items: [
+      {
+        ok: true,
+        text: 'Exponential capacity (the paper’s c·2^(d/2)-flavored results) is for RANDOM, well-separated patterns on the sphere. The random-±1 curve is the theorem’s home turf: watch modern stay near 1.0 while classical collapses past ~0.14·d.'
+      },
+      {
+        ok: false,
+        text: 'Correlated patterns void the warranty: glyphs share strokes, so glyph capacity dies far below any exponential promise. The separation Δ (patterns panel) is the quantity the theorems actually charge for, not raw N.'
+      },
+      {
+        ok: false,
+        text: 'A success rate of 1.0 at N = 128 is not “infinite memory” — it’s this noise level, this β, this Δ. Raise the noise slider and re-run before believing anything.'
+      }
+    ]
   }
 ];
 

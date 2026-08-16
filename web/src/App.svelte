@@ -20,6 +20,8 @@
   import LogitApp from './components/LogitApp.svelte';
   import ReasonApp from './components/ReasonApp.svelte';
   import AttentionLabApp from './components/attn/AttentionLabApp.svelte';
+  import HopfieldApp from './components/hopfield/HopfieldApp.svelte';
+  import HopfieldRealApp from './components/hopfield/HopfieldRealApp.svelte';
   import TrainApp from './components/train/TrainApp.svelte';
 
   const COMPONENTS: Record<string, Component> = {
@@ -28,6 +30,8 @@
     morfessor: MorfessorApp,
     llm: LlmApp,
     attn: AttentionLabApp,
+    hopfield: HopfieldApp,
+    hopfieldreal: HopfieldRealApp,
     graph: GraphApp,
     coder: CoderApp,
     logit: LogitApp,

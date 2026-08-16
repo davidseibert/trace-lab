@@ -16,5 +16,8 @@
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "types": ["svelte", "vite/client"]
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte", "src/**/*.svelte.ts"]
+  "include": ["src/**/*.ts", "src/**/*.svelte", "src/**/*.svelte.ts"],
+  // *.test.ts files run under `bun test` (which brings its own bun:test
+  // types); they're excluded here so svelte-check doesn't need @types/bun.
+  "exclude": ["src/**/*.test.ts"]
 }

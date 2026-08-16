@@ -78,12 +78,21 @@ export const LENSES: LensMeta[] = [
     seeAlso: ['logit', 'llm']
   },
   {
+    id: 'hopfieldreal',
+    title: 'Hopfield·heads',
+    kind: 'instrument',
+    engine: true,
+    blurb:
+      'Every attention head of a real model, read as one-step Hopfield retrieval: rescale β and watch which heads are retrievers, poolers, or mixers on GPT-2, Qwen, Gemma and Llama.',
+    seeAlso: ['hopfield', 'attn', 'logit']
+  },
+  {
     id: 'llm',
     title: 'Mini·GPT',
     kind: 'toy',
     blurb:
       'A 2-layer GPT trained in your browser: scrub training, read every activation, implant facts straight into the FFN.',
-    seeAlso: ['attn', 'logit', 'coder']
+    seeAlso: ['attn', 'logit', 'coder', 'hopfield']
   },
   {
     id: 'attn',
@@ -91,7 +100,15 @@ export const LENSES: LensMeta[] = [
     kind: 'toy',
     blurb:
       'Scaled dot-product attention on editable Q/K/V matrices — click any cell and see exactly where the number came from.',
-    seeAlso: ['llm', 'reason']
+    seeAlso: ['llm', 'reason', 'hopfield']
+  },
+  {
+    id: 'hopfield',
+    title: 'Hopfield·retrieve',
+    kind: 'toy',
+    blurb:
+      'Modern continuous Hopfield networks: corrupt a stored pattern, watch one softmax update snap it back — then turn β down and watch retrieval melt into averaging. The update rule IS attention.',
+    seeAlso: ['hopfieldreal', 'attn', 'llm']
   },
   {
     id: 'grammar',

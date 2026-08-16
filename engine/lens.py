@@ -485,6 +485,86 @@ def ablate_report(model, tok, ids: list[int], pos: int, mask_start: int, mask_en
     }
 
 
+# Regime thresholds — MUST match the toy lens's exported constants in
+# web/src/lib/hopfield/hopfield.ts (RETRIEVAL_EFFK / GLOBAL_EFFK_FRAC), so the
+# toy and the instrument speak one vocabulary.
+HOPFIELD_RETRIEVAL_EFFK = 1.5
+HOPFIELD_GLOBAL_EFFK_FRAC = 0.75
+
+
+def _hopfield_regime(eff_k: float, n: int) -> str:
+    if eff_k <= HOPFIELD_RETRIEVAL_EFFK:
+        return "retrieval"
+    if eff_k >= HOPFIELD_GLOBAL_EFFK_FRAC * n:
+        return "global"
+    return "metastable"
+
+
+@torch.no_grad()
+def hopfield_report(model, tok, text: str, pos: int, gammas: list[float]) -> dict:
+    """Every attention head read as one-step modern-Hopfield retrieval
+    (Ramsauer et al. 2020): the head's row at destination ``pos`` is
+    softmax(β·scores) over the stored patterns (= earlier positions), and
+    rescaling the inverse temperature by γ needs no pre-softmax logits at all —
+    softmax(γ·z) = wᵞ / Σ wᵞ from the post-softmax row w. γ = 1 is the model's
+    own β = 1/√d_k; the sweep asks "which retrieval regime is this head in,
+    and how close to a phase boundary does the trained model sit?".
+
+    Per head per γ: row entropy in bits, max weight, and the effective number
+    of mixed patterns 2^H, classified into retrieval / metastable / global with
+    the same thresholds as the Hopfield·retrieve toy lens.
+    """
+    for g in gammas:
+        if not 0 < g <= 64:
+            raise ValueError(f"gammas must be in (0, 64], got {g}.")
+    input_ids = tok(text, return_tensors="pt").input_ids
+    _preflight(model, input_ids, 0)
+    n = input_ids.shape[1]
+    if pos < 0:
+        pos = n + pos
+    if not 0 < pos < n:
+        raise ValueError(f"pos {pos} out of range (need 0 < pos < {n}).")
+    device = next(model.parameters()).device
+    input_ids = input_ids[:, : pos + 1].to(device)
+    seq = pos + 1
+
+    out = model(input_ids=input_ids, output_attentions=True)
+
+    heads = []
+    for L, att in enumerate(out.attentions):
+        rows = att[0, :, pos, :].float().cpu()  # [heads, seq] post-softmax
+        for h in range(rows.shape[0]):
+            a = rows[h].clamp_min(1e-30)
+            curves = []
+            regime_at_1 = None
+            for g in gammas:
+                # wᵞ renormalized — exactly softmax at inverse temperature γ·β.
+                w = a**g
+                w = w / w.sum()
+                ent = float(-(w * w.clamp_min(1e-12).log2()).sum())
+                eff = 2.0**ent
+                regime = _hopfield_regime(eff, seq)
+                curves.append({
+                    "gamma": g,
+                    "entropy_bits": round(ent, 3),
+                    "max_w": round(float(w.max()), 4),
+                    "eff_k": round(eff, 2),
+                    "regime": regime,
+                })
+                if g == 1.0:
+                    regime_at_1 = regime
+            heads.append({"layer": L, "head": h, "curves": curves,
+                          "regime_at_1": regime_at_1})
+
+    return {
+        "pos": pos, "seq": seq,
+        "n_layers": len(out.attentions), "n_heads": out.attentions[0].shape[1],
+        "gammas": gammas,
+        "tokens": [_clean(tok.decode([int(t)])) for t in input_ids[0]],
+        "heads": heads,
+    }
+
+
 @torch.no_grad()
 def reason_events(model, tok, text: str, max_new: int = 512,
                   temperature: float = 0.0, seed: int | None = None):

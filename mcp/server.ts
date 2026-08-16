@@ -24,6 +24,7 @@ import type {
   LensResponse,
   ColumnResponse,
   AttnResponse,
+  HopfieldHeadsResponse,
 } from "../web/src/lib/logit/api";
 
 const SPECTATE_URL = process.env.TUI_SPECTATE ?? "http://127.0.0.1:5182";
@@ -360,6 +361,72 @@ server.registerTool(
   async ({ model, ids, pos, mask_start, mask_end, top_k }) => {
     try {
       return ok(await postJson(`${ENGINE_URL}/ablate`, { model, ids, pos, mask_start, mask_end, top_k }, ENGINE_HINT));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "hopfield_heads",
+  {
+    title: "Heads as Hopfield retrieval",
+    description:
+      "Every attention head read as one-step modern-Hopfield retrieval (Ramsauer et al. 2020) at one " +
+      "destination position: the head's row is softmax over stored patterns (= earlier positions), " +
+      "rescaled across a γ sweep (γ = 1 is the model's own 1/√d_k) and classified " +
+      "retrieval / metastable / global by effective mixed-pattern count 2^H — same thresholds as the " +
+      "Hopfield·retrieve toy lens. Returns a regime census per γ, a per-layer census at γ = 1, and the " +
+      "sharpest/softest heads; pass layer+head for one head's full curves.",
+    inputSchema: {
+      model: z.string().default("gpt2").describe("One of the engine's models — see engine_health"),
+      prompt: z.string().min(1).describe("Raw text (no chat templating)"),
+      pos: z.number().int().min(-1).max(1500).default(-1).describe("Destination position; -1 = last token"),
+      gammas: z.array(z.number().positive().max(64)).min(1).max(16).optional(),
+      top: z.number().int().min(1).max(40).default(8).describe("How many sharpest/softest heads to return"),
+      layer: z.number().int().min(0).optional(),
+      head: z.number().int().min(0).optional(),
+    },
+  },
+  async ({ model, prompt, pos, gammas, top, layer, head }) => {
+    try {
+      const r = await postJson<HopfieldHeadsResponse>(
+        `${ENGINE_URL}/hopfield`,
+        { model, prompt, pos, gammas },
+        ENGINE_HINT,
+      );
+      const at1 = (h: HopfieldHeadsResponse["heads"][number]) =>
+        h.curves.find((c) => c.gamma === 1) ?? h.curves[Math.floor(h.curves.length / 2)];
+      const censusAt = (gi: number) => {
+        const c = { retrieval: 0, metastable: 0, global: 0 };
+        for (const h of r.heads) c[h.curves[gi].regime]++;
+        return c;
+      };
+      const byLayer: Record<string, { retrieval: number; metastable: number; global: number }> = {};
+      for (const h of r.heads) {
+        const key = `layer ${h.layer}`;
+        byLayer[key] ??= { retrieval: 0, metastable: 0, global: 0 };
+        byLayer[key][at1(h).regime]++;
+      }
+      const ranked = [...r.heads].sort((a, b) => at1(a).entropy_bits - at1(b).entropy_bits);
+      const brief = (h: HopfieldHeadsResponse["heads"][number]) => {
+        const c = at1(h);
+        return { layer: h.layer, head: h.head, entropy_bits: c.entropy_bits, max_w: c.max_w, eff_k: c.eff_k, regime: c.regime };
+      };
+      const picked =
+        layer !== undefined && head !== undefined
+          ? (r.heads.find((h) => h.layer === layer && h.head === head)?.curves ?? null)
+          : undefined;
+      return ok({
+        model: r.model, pos: r.pos, seq: r.seq,
+        n_layers: r.n_layers, n_heads: r.n_heads,
+        last_token: r.tokens[r.tokens.length - 1],
+        census_per_gamma: r.gammas.map((g, gi) => ({ gamma: g, ...censusAt(gi) })),
+        census_per_layer_at_gamma_1: byLayer,
+        sharpest_heads: ranked.slice(0, top).map(brief),
+        softest_heads: ranked.slice(-top).reverse().map(brief),
+        picked,
+      });
     } catch (e) {
       return fail(e);
     }

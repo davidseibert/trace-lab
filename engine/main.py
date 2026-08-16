@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from lens import (ablate_report, attn_report, column_report, lens_report, load_model,
+from lens import (ablate_report, attn_report, column_report, hopfield_report, lens_report, load_model,
                   pick_device, reason_events, render_chat)
 
 # The Qwen3-0.6B pair mirrors Raschka's *Build a Reasoning Model from Scratch*
@@ -382,6 +382,30 @@ def attn(req: AttnRequest):
     return {"model": req.model,
             **attn_report(model, req.ids, req.pos,
                           pick_layer=req.layer, pick_head=req.head)}
+
+
+class HopfieldRequest(BaseModel):
+    model: str = "Qwen/Qwen3-0.6B"
+    # Raw text, tokenized without chat templating — the Hopfield reading is
+    # about the heads, not the conversation format.
+    prompt: str = Field(min_length=1, max_length=8000)
+    # Destination position whose rows to read; -1 = the last token. Same VRAM
+    # cap as /attn (eager attention materializes [heads, seq, seq] per layer).
+    pos: int = Field(default=-1, ge=-1, le=1500)
+    # Inverse-temperature multipliers; γ = 1 is the model's own 1/√d_k.
+    gammas: list[float] = Field(default=[0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
+                                min_length=1, max_length=16)
+
+
+@app.post("/hopfield")
+def hopfield(req: HopfieldRequest):
+    """Every attention head read as one-step modern-Hopfield retrieval:
+    per-head entropy/max-weight curves across a γ-rescaled softmax (needs only
+    post-softmax rows), classified retrieval/metastable/global with the same
+    thresholds as the Hopfield·retrieve toy lens."""
+    model, tok, _device = _get(req.model)
+    return {"model": req.model,
+            **hopfield_report(model, tok, req.prompt, req.pos, req.gammas)}
 
 
 class AblateRequest(BaseModel):

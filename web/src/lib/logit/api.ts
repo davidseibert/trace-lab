@@ -337,6 +337,56 @@ export async function fetchAblate(req: {
   return res.json();
 }
 
+/** Retrieval regimes — same thresholds engine-side as the toy lens's exported
+ * constants in lib/hopfield/hopfield.ts, so both lenses speak one vocabulary. */
+export type HopfieldRegime = 'retrieval' | 'metastable' | 'global';
+
+/** One head's behavior at one inverse-temperature multiple γ (γ = 1 is the
+ * model's own 1/√d_k). */
+export interface HopfieldCurvePoint {
+  gamma: number;
+  /** Entropy of the γ-rescaled attention row, in bits. */
+  entropy_bits: number;
+  max_w: number;
+  /** 2^entropy — effective number of mixed source positions. */
+  eff_k: number;
+  regime: HopfieldRegime;
+}
+
+export interface HopfieldHead {
+  layer: number;
+  head: number;
+  curves: HopfieldCurvePoint[];
+  /** The regime at γ = 1 (null if 1.0 wasn't in the sweep). */
+  regime_at_1: HopfieldRegime | null;
+}
+
+/** The full /hopfield wire contract — canonical for this client and the MCP
+ * bridge. Every attention head read as one-step modern-Hopfield retrieval. */
+export interface HopfieldHeadsResponse {
+  model: string;
+  pos: number;
+  seq: number;
+  n_layers: number;
+  n_heads: number;
+  gammas: number[];
+  /** The forwarded tokens (ids[:pos+1]) as display strings. */
+  tokens: string[];
+  heads: HopfieldHead[];
+}
+
+/** Read every head at one destination as Hopfield retrieval across a γ sweep. */
+export async function fetchHopfield(req: {
+  model: string;
+  prompt: string;
+  /** Destination position; -1 (default) = the last token. */
+  pos?: number;
+  gammas?: number[];
+}): Promise<HopfieldHeadsResponse> {
+  const res = await post('/hopfield', req);
+  return res.json();
+}
+
 export async function fetchColumn(req: {
   model: string;
   prompt: string;

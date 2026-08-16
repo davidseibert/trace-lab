@@ -342,6 +342,59 @@ highlighted in the arc diagram (`AttentionView` gained an optional `focusPos`
 prop for this — it defaults to the last token so the mini-GPT lens is
 unaffected). Same shared component, same generic `Player<S>`, a different `S`.
 
+## Hopfield lenses — retrieval, energy, and the attention identity
+
+Two lenses for one paper — Ramsauer et al. 2020, *"Hopfield Networks is All
+You Need"*. The toy (`Hopfield·retrieve`) isolates the mechanism; the
+instrument (`Hopfield·heads`) finds it in real models — the same pairing as
+Attention Lab → Logit·real.
+
+**The identity.** The modern continuous Hopfield update over stored patterns
+`X` (rows) and state `ξ` is `ξ_new = Xᵀ·softmax(β·Xξ)` — literally one row of
+transformer attention with the patterns as both keys and values and `β`
+playing `1/√d_k`. Its energy
+`E = −(1/β)·lse(β, Xξ) + ½‖ξ‖² + (1/β)·ln N + ½M²` provably decreases under
+the update (CCCP); with the constants kept (most presentations drop them)
+`E ≥ 0`, so the lens charts it on the house `[0, max]` scale, in bits (÷ln 2).
+
+**Hopfield·retrieve** (`web/src/lib/hopfield/`, toy tier). Store patterns —
+5×7 pixel glyphs (correlated pairs like B/P and H/U included on purpose) or
+random ±1 vectors — corrupt one with seeded flips or a masked bottom half,
+and scrub the update iterations. The one-step-convergence theorem is the
+energy chart's cliff at iter 1. Alongside it, the **classical** binary network
+(`sign(Wξ)`, Hebbian `W = (1/d)·Σxxᵀ`, asynchronous sweeps in fixed order so
+energy is monotone and the run deterministic) retrieves the same query in
+`both` mode — one-step vs many-sweeps, side by side. Three exhibits:
+
+- **Regime vs β** — 33 log-spaced β around `β* = 1/√d` (attention's value),
+  each a full retrieval run, classified by effective mixed-pattern count
+  `2^H(weights)`: *retrieval* (effK ≤ 1.5), *global* (effK ≥ 0.75·N), else
+  *metastable*. The phase structure of the paper, scrubbable; low β isn't
+  failure, it's a different question ("what do my patterns share?").
+- **Capacity** — success rate vs N, modern and classical on identical patterns
+  and corruptions, 25 seeded trials per point, with the classical `0.138·d`
+  wall drawn in. Random ±1 patterns are the theorems' home turf (modern stays
+  near 1.0 past the classical collapse); correlated glyphs die early because
+  the separation `Δ = min(xᵢᵀxᵢ − max xᵢᵀxⱼ)` — shown in the patterns panel —
+  is what the theorems actually charge for.
+- **≡ attention** — the bridge table mapping `ξ↔q`, `X↔K`, `X↔V`,
+  `β↔1/√d_k`, with the live softmax weights rendered as a literal attention
+  row. Same arithmetic as Attention Lab, no analogy.
+
+**Hopfield·heads** (`/hopfield` endpoint + `HopfieldRealApp`, instrument
+tier). Every attention head's row at one destination is one Hopfield
+retrieval step over the sequence's own positions. The trick that makes a
+temperature sweep free: rescaling the inverse temperature by γ needs no
+pre-softmax logits, since `softmax(γ·z) = wᵞ/Σwᵞ` from the post-softmax row
+the engine already captures. The Player scrubs γ (1 = the model's own
+`1/√d_k`); the layer×head map colors each head by regime — same thresholds as
+the toy, one shared vocabulary — and the census bars reproduce the paper's
+observation in the wild (on GPT-2's copy-pattern prompt: 127/144 heads
+metastable, a handful of sharp retrievers like L4H11 that stay in retrieval
+down to γ = 0.5). A head whose regime flips near γ = 1 sits at a phase
+boundary — the trained temperature is doing real work there. Attention is
+still not explanation: regimes nominate candidates, `/ablate` settles them.
+
 ## Logit·real lens (GPT-2 / Qwen)
 
 The mini-GPT lens's ladder, climbed by a **real model**. A small Python engine
