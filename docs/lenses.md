@@ -415,6 +415,35 @@ experiment: `arch = gpt | encoder | mlp` × `signal = games | solver | distill`
   encoder collapses to as little as 1/48 live units at 90% sparsity while
   holding ~63% agreement — the low-description-length solution, found.
 
+## Tic·arena — the roster, head-to-head
+
+Any policy over positions can compete: trained TicRuns, the solver (two
+personalities: uniform over optimal, or **trappy** — tie-broken by how many
+opponent replies lose, the quantity that separates minimax-equal moves), a
+random baseline, and — with the engine up — real LLMs. Duels with seeded
+temperature sampling, a round-robin standings matrix, per-game replay (the
+mover's policy overlaid on the board, bits paid per move, "open in Tic·tac"),
+and a **report card**: the probe suite pointed at any player — agreement,
+bits vs optimal, D₄ equivariance, illegal mass, decisiveness.
+
+**LLM players are read, not sampled**: one `/lens` forward per unique
+position, parsing the next-token distribution over the nine digit tokens
+(zero engine changes; positions memoized). The prompt ending is
+tokenizer-dependent — GPT-2-style BPEs fuse `" 4"` into one token (no
+trailing space), Qwen/Gemma emit the space separately (trailing space) — so
+each player self-calibrates on its first call (measured: Qwen3 raw goes 0% →
+94% digit mass with the right ending; Gemma hits 99.9%; Qwen3 *chat* answers
+"The…" at 0.1% decisive, which is why raw is the default mode).
+
+Findings from the first verified runs: the trappy solver converts 10/10 wins
+from random where the uniform solver got 9 (tie-breaking made visible);
+solvers draw each other forever; and the headline report card — **Qwen3-0.6B
+(600M params) scores 50% agreement (below random's 60%), 41% illegal mass,
+but 0.135 equivariance (more symmetric than the 5.7k-param toy's 0.239,
+which scores 73% agreement)**. The LLM sees the board's geometry, not the
+game: symmetric preferences, no occupancy tracking, no strategy. The report
+card probes transfer, not intelligence — and says so in the guide.
+
 ## Hopfield lenses — retrieval, energy, and the attention identity
 
 Two lenses for one paper — Ramsauer et al. 2020, *"Hopfield Networks is All

@@ -68,6 +68,7 @@ Each is a way to write, read, or account for structure in bits. See
 | **Attention Lab** | hand-sized, editable Q/K/V matrices | watch scaled dot-product attention compute, one clickable cell at a time |
 | **Hopfield·retrieve** | stored glyph / random patterns | corrupt one, watch the modern Hopfield update snap it back — the update rule IS attention (Ramsauer et al. 2020) |
 | **Tic·tac** | tic-tac-toe, solved | an arch × signal grid against the solved game: causal GPT vs board encoder vs MLP, trained on sampled games, soft solver targets, or distillation — minimax agreement, emergent D₄ equivariance, and L1-sparse circuits, all scrubbable |
+| **Tic·arena** | the whole roster | head-to-head duels, a round-robin table, and probe-suite report cards — toys vs solvers vs (with the engine) Qwen3/Gemma read as next-token distributions over the digit tokens |
 | **Logit·real** | GPT-2 / Qwen | the classic logit lens + J-lens over a real model, in bits |
 | **Hopfield·heads** | every attention head of a real model | read each head as one-step Hopfield retrieval; sweep β and classify retrievers / poolers / mixers |
 | **Reason·trace** | Qwen3-0.6B thinking traces | stream a reasoning trace live, per-token bits ladder as it's born — reasoning as compression |

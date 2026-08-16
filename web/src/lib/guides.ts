@@ -324,6 +324,33 @@ const SECTIONS: GuideSection[] = [
       }
     ]
   },
+  // ---- Tic·arena -------------------------------------------------------------
+  {
+    id: 'arenaread',
+    title: 'reading the arena honestly',
+    items: [
+      {
+        ok: true,
+        text: 'LLM moves are read as full next-token distributions over the digit tokens — one forward per position, memoized, no sampling. It measures the model’s PREFERENCE, not one roll of it. Decisiveness is the mass it put on any digit at all; the rest went to off-task tokens.'
+      },
+      {
+        ok: true,
+        text: 'Trappy vs uniform solver is the tie-breaking exhibit: identical minimax optimality, different opponent model. Watch trappy convert more wins from random — and watch the two solvers draw each other forever.'
+      },
+      {
+        ok: false,
+        text: 'Score against the perfect solver only measures “doesn’t lose” — wins against perfect play do not exist, so that column is really a draw rate.'
+      },
+      {
+        ok: false,
+        text: 'An LLM’s illegal or occupied-cell mass is not stupidity — the board is serialized text on a task it was never trained for. The report card probes TRANSFER, not intelligence. And chat vs raw prompting are different players: same weights, different question. Quote the mode.'
+      },
+      {
+        ok: false,
+        text: 'N games at temperature 0 between deterministic players is one game repeated. Raise the temperature (or vary the seed) before reading a win rate as a statistic.'
+      }
+    ]
+  },
   // ---- Tic·tac ---------------------------------------------------------------
   {
     id: 'tictacarch',

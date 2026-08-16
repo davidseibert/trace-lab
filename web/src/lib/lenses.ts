@@ -108,7 +108,15 @@ export const LENSES: LensMeta[] = [
     kind: 'toy',
     blurb:
       'A tiny transformer learns tic-tac-toe against the solved game: watch optimal-move agreement rise, D₄ symmetry emerge, and L1 sparsity carve the network into a readable circuit.',
-    seeAlso: ['llm', 'attn', 'hopfield']
+    seeAlso: ['llm', 'attn', 'hopfield', 'arena']
+  },
+  {
+    id: 'arena',
+    title: 'Tic·arena',
+    kind: 'toy',
+    blurb:
+      'Every Tic·tac player head-to-head — the toys, the solver, a trap-maximizing solver, and (with the engine up) Qwen3 or Gemma reading the board as text. Duels, a round-robin table, and report cards against the solved game.',
+    seeAlso: ['tictac', 'logit']
   },
   {
     id: 'hopfield',

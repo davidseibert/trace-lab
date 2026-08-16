@@ -143,6 +143,10 @@ export async function fetchLens(req: {
   jlens?: boolean;
   /** Greedy-decode up to this many tokens server-side; the lens covers prompt+continuation. */
   rollout?: number;
+  /** Wrap the prompt in the model's chat template (server-side render). */
+  chat?: boolean;
+  /** With chat: open a <think> block (Qwen3 reasoning). */
+  thinking?: boolean;
 }): Promise<LensResponse> {
   const res = await post('/lens', { top_k: 5, jlens: true, rollout: 0, ...req });
   return res.json();
