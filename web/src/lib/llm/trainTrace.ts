@@ -56,6 +56,22 @@ export interface TrainTraceOptions {
   steps?: number;
   /** RNG seed; same seed ⇒ identical trace. */
   seed?: number;
+  /**
+   * L1 penalty coefficient on ALL weights (embeddings included, mirroring the
+   * classic sparse-circuits recipe): after backward(), each param gets
+   * grad[i] += l1Lambda·sign(data[i]) before the Adam step. Injected as a
+   * hand-computed gradient because backward() is single-root and destructive —
+   * a second loss term can't be backward'd separately. 0/undefined = off.
+   */
+  l1Lambda?: number;
+  /**
+   * Cap the per-step meanLoss sweep to a fixed subsample of the training set
+   * (chosen once, up front, from its own rng so the training sample stream is
+   * unaffected). Needed for big corpora — the full sweep is |train| forwards
+   * per step. undefined, or ≥ trainData.length, = the full set, bit-identical
+   * to the option being absent.
+   */
+  evalSample?: number;
 }
 
 /**
@@ -100,14 +116,29 @@ export function trainTrace(ds: Dataset, opts: TrainTraceOptions = {}): TrainRun 
   const probeInput = ids(ds.probe);
   const probeTargetId = tok2id.get(ds.probeTarget)!;
 
-  /** Mean cross-entropy across the whole training set (no gradient). */
+  // The loss-curve eval set: the whole training set, or a fixed seeded
+  // subsample of it. The subsample draws from its OWN rng (not `rng`), so
+  // turning the option on never shifts weight init or example sampling.
+  let evalSet = train;
+  if (opts.evalSample !== undefined && train.length > opts.evalSample) {
+    const sub = mulberry32(seed ^ 0x9e3779b9);
+    const idx = [...train.keys()];
+    // Partial Fisher–Yates: the first evalSample entries are a uniform sample.
+    for (let k = 0; k < opts.evalSample; k++) {
+      const r = k + randInt(sub, idx.length - k);
+      [idx[k], idx[r]] = [idx[r], idx[k]];
+    }
+    evalSet = idx.slice(0, opts.evalSample).map((i) => train[i]);
+  }
+
+  /** Mean cross-entropy across the eval set (no gradient). */
   const meanLoss = (): number => {
     let sum = 0;
-    for (const { input, targets } of train) {
+    for (const { input, targets } of evalSet) {
       const logits = model.forward(input);
       sum += crossEntropyLoss(logits, targets).data[0];
     }
-    return sum / train.length;
+    return sum / evalSet.length;
   };
 
   const out: LlmStep[] = [];
@@ -161,6 +192,13 @@ export function trainTrace(ds: Dataset, opts: TrainTraceOptions = {}): TrainRun 
     const logits = model.forward(ex.input);
     const loss2 = crossEntropyLoss(logits, ex.targets);
     backward(loss2);
+    if (opts.l1Lambda) {
+      // d|w|/dw = sign(w) (0 at 0, so dead weights stay dead) — the L1 pull
+      // toward zero that makes the circuit-view threshold meaningful.
+      for (const p of model.params()) {
+        for (let j = 0; j < p.data.length; j++) p.grad[j] += opts.l1Lambda * Math.sign(p.data[j]);
+      }
+    }
     optimizer.step();
   }
 

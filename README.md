@@ -67,6 +67,7 @@ Each is a way to write, read, or account for structure in bits. See
 | **Mini-GPT** | a training trace | implant facts, read the residual ladder, J-lens |
 | **Attention Lab** | hand-sized, editable Q/K/V matrices | watch scaled dot-product attention compute, one clickable cell at a time |
 | **Hopfield·retrieve** | stored glyph / random patterns | corrupt one, watch the modern Hopfield update snap it back — the update rule IS attention (Ramsauer et al. 2020) |
+| **Tic·tac** | tic-tac-toe move sequences | train a tiny transformer against the solved game: minimax agreement, emergent D₄ equivariance, and L1-sparse circuits, all scrubbable |
 | **Logit·real** | GPT-2 / Qwen | the classic logit lens + J-lens over a real model, in bits |
 | **Hopfield·heads** | every attention head of a real model | read each head as one-step Hopfield retrieval; sweep β and classify retrievers / poolers / mixers |
 | **Reason·trace** | Qwen3-0.6B thinking traces | stream a reasoning trace live, per-token bits ladder as it's born — reasoning as compression |

@@ -92,7 +92,7 @@ export const LENSES: LensMeta[] = [
     kind: 'toy',
     blurb:
       'A 2-layer GPT trained in your browser: scrub training, read every activation, implant facts straight into the FFN.',
-    seeAlso: ['attn', 'logit', 'coder', 'hopfield']
+    seeAlso: ['attn', 'logit', 'coder', 'hopfield', 'tictac']
   },
   {
     id: 'attn',
@@ -100,7 +100,15 @@ export const LENSES: LensMeta[] = [
     kind: 'toy',
     blurb:
       'Scaled dot-product attention on editable Q/K/V matrices — click any cell and see exactly where the number came from.',
-    seeAlso: ['llm', 'reason', 'hopfield']
+    seeAlso: ['llm', 'reason', 'hopfield', 'tictac']
+  },
+  {
+    id: 'tictac',
+    title: 'Tic·tac',
+    kind: 'toy',
+    blurb:
+      'A tiny transformer learns tic-tac-toe against the solved game: watch optimal-move agreement rise, D₄ symmetry emerge, and L1 sparsity carve the network into a readable circuit.',
+    seeAlso: ['llm', 'attn', 'hopfield']
   },
   {
     id: 'hopfield',

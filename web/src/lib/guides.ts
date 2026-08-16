@@ -324,6 +324,59 @@ const SECTIONS: GuideSection[] = [
       }
     ]
   },
+  // ---- Tic·tac ---------------------------------------------------------------
+  {
+    id: 'tictaccircuit',
+    title: 'reading the circuit panel honestly',
+    items: [
+      {
+        ok: true,
+        text: 'The correlation heatmap is a hypothesis generator: a unit that tracks “X threat on line 012” across the probe suite is a CANDIDATE line detector. Confirm by scrubbing training and watching the correlation strengthen as agreement rises — a detector that predates competence is suspicious.'
+      },
+      {
+        ok: true,
+        text: 'L1 makes the weight histogram bimodal, so the threshold slider has a natural notch: compare λ = 0.001 against λ = off and watch “units live” become meaningful instead of arbitrary.'
+      },
+      {
+        ok: false,
+        text: 'The sparsity threshold is an inspection choice, not a fact about the model — slide it and watch “the circuit” change size before quoting a unit count anywhere.'
+      },
+      {
+        ok: false,
+        text: 'Attention on a cell says where information flowed, not why the move was chosen. Only an ablation supports “this head does X”, and this panel doesn’t ablate.'
+      },
+      {
+        ok: false,
+        text: 'High agreement with minimax is behavioral, not mechanistic — the net matches the solved game’s outputs on positions like the ones it saw; there is no game tree inside. “Understands tic-tac-toe” is not a reading this lens supports.'
+      }
+    ]
+  },
+  {
+    id: 'tictacequiv',
+    title: 'symmetry and the two corpora',
+    items: [
+      {
+        ok: true,
+        text: 'Nothing in the loss asks for D₄-equivariance — the falling red curve is emergent structure. It falls further on the optimal corpus, where symmetric positions genuinely have symmetric answers.'
+      },
+      {
+        ok: true,
+        text: 'The meter compares legal-renormalized policies, so it measures strategy symmetry, not legality bookkeeping. And the probe suite includes positions no optimal game ever visits — agreement is generalization, not memorization.'
+      },
+      {
+        ok: false,
+        text: 'Emergent equivariance is approximate: the 8 mini-boards disagree in the tail even late in training. A meter of 0.05 is “roughly symmetric”, never “the network represents the group”.'
+      },
+      {
+        ok: false,
+        text: 'The random-legal corpus model is not a worse strategist — it answers a different question. Watch illegal mass fall while agreement stays flat: it learned the rules’ support, not the game’s values. Comparing the corpora is the point of the toggle.'
+      },
+      {
+        ok: false,
+        text: 'Uniform mass over all 9 openings is not confusion — all nine are minimax-optimal (perfect play draws from everywhere), so the training target ITSELF is uniform there. Expect ~3.2 bits of irreducible loss at ply 0.'
+      }
+    ]
+  },
   // ---- Hopfield·retrieve ----------------------------------------------------
   {
     id: 'hopfieldread',

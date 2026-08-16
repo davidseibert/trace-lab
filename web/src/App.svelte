@@ -21,6 +21,7 @@
   import ReasonApp from './components/ReasonApp.svelte';
   import AttentionLabApp from './components/attn/AttentionLabApp.svelte';
   import HopfieldApp from './components/hopfield/HopfieldApp.svelte';
+  import TictacApp from './components/tictac/TictacApp.svelte';
   import HopfieldRealApp from './components/hopfield/HopfieldRealApp.svelte';
   import TrainApp from './components/train/TrainApp.svelte';
 
@@ -31,6 +32,7 @@
     llm: LlmApp,
     attn: AttentionLabApp,
     hopfield: HopfieldApp,
+    tictac: TictacApp,
     hopfieldreal: HopfieldRealApp,
     graph: GraphApp,
     coder: CoderApp,

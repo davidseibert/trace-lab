@@ -342,6 +342,48 @@ highlighted in the arc diagram (`AttentionView` gained an optional `focusPos`
 prop for this — it defaults to the last token so the mini-GPT lens is
 unaffected). Same shared component, same generic `Player<S>`, a different `S`.
 
+## Tic·tac — a solved game as interpretability ground truth
+
+A one-block MiniGPT (~5.7k params, the existing `trainTrace`/`model` machinery
+with a lens-local `Dataset` — zero model changes) learns tic-tac-toe from move
+sequences, and every panel checks the network against something exactly known:
+the full minimax solution (5,478 legal positions, memoized in
+`web/src/lib/tictac/game.ts`), the board's symmetry group D₄ (8 transforms,
+765 orbits), and the game's known feature basis (8 win lines). The Player
+scrubs **training steps**; the current game is a clickable board replayed
+on demand against any step's snapshotted weights.
+
+**Corpus toggle** — the two-questions design: minimax-optimal games teach the
+game's *values* (agreement with the solver is the headline curve), random-legal
+games teach only the rules' *support* (illegal mass falls while agreement stays
+flat), and `mixed` sits between. The probe suite deliberately includes
+positions no optimal game visits, so agreement measures generalization.
+
+**Sparsity** — the circuits-repo recipe, transplanted: `trainTrace` gained an
+opt-in `l1Lambda` (after `backward()`, `grad += λ·sign(w)` on every weight,
+embeddings included) and the circuit panel applies a threshold only at
+inspection time: surviving FFN edges, live hidden units, each unit's Pearson
+correlation against the 26 ground-truth features (line threats per side,
+side-to-move, cell occupancy), and the token embeddings' top-2 PCs — where
+the corner/edge/center orbit classes visibly cluster after training.
+
+**Equivariance** — nothing in the loss asks for D₄ symmetry, so the meter is
+measuring emergence: for probe positions s and each non-identity g,
+`TV(g⁻¹·π(g·s), π(s))` on legal-renormalized policies. It falls from ~0.46
+(random init) to ~0.23 over a default run, and the equivariance panel shows
+the current position under all 8 symmetries with the model's own policy on
+each — a perfectly equivariant net would draw one picture eight ways.
+
+**The poset strip** — position → still-achievable-outcomes is a monotone map
+on the game DAG (outcomes only disappear); the strip draws it per ply beside
+the bits the model paid for each played move.
+
+Honest findings baked into the guides: agreement is behavioral, not
+mechanistic; the forced block (`·041→2`, the fixed probe) is *unstable* under
+batch-1 SGD at this scale — it comes and goes with seed and steps, which is
+scrubbing-visible and is itself the exhibit; and ~3.2 bits of loss at ply 0
+is irreducible because all nine openings are minimax-optimal.
+
 ## Hopfield lenses — retrieval, energy, and the attention identity
 
 Two lenses for one paper — Ramsauer et al. 2020, *"Hopfield Networks is All
