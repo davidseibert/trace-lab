@@ -10,11 +10,17 @@
 
   let {
     game,
-    bits
+    bits,
+    ply = null,
+    onSeek
   }: {
     game: number[];
     /** bits[k] = −log₂ π(move k) at the current step (length = game.length). */
     bits: number[];
+    /** Currently viewed ply — highlighted; the strip doubles as the turn scrubber's track. */
+    ply?: number | null;
+    /** Click a ply column to jump the turn scrubber there. */
+    onSeek?: (ply: number) => void;
   } = $props();
 
   const plies = $derived.by(() =>
@@ -31,7 +37,21 @@
 
 <div class="strip scrollbar">
   {#each plies as p (p.k)}
-    <div class="ply">
+    <div
+      class="ply"
+      class:current={ply === p.k}
+      class:seekable={!!onSeek}
+      role={onSeek ? 'button' : undefined}
+      tabindex={onSeek ? 0 : undefined}
+      title={onSeek ? `view the game at ply ${p.k}` : undefined}
+      onclick={() => onSeek?.(p.k)}
+      onkeydown={(e) => {
+        if (onSeek && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          onSeek(p.k);
+        }
+      }}
+    >
       <div class="chips">
         <span class="chip mono" class:on={(p.achievable & X_WIN) !== 0} style="--c: var(--model)" title="X win still achievable?">✕</span>
         <span class="chip mono" class:on={(p.achievable & DRAW) !== 0} style="--c: var(--muted)" title="draw still achievable?">=</span>
@@ -55,7 +75,13 @@
 
 <style>
   .strip { display: flex; gap: 8px; overflow-x: auto; align-items: flex-start; padding-bottom: 4px; }
-  .ply { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 0 0 auto; }
+  .ply {
+    display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 0 0 auto;
+    padding: 3px 4px; border: 1.5px solid transparent; border-radius: 6px;
+  }
+  .ply.seekable { cursor: pointer; }
+  .ply.seekable:hover { border-color: var(--border-2); }
+  .ply.current { border-color: var(--chosen); }
   .chips { display: flex; flex-direction: column; gap: 2px; }
   .chip {
     font-size: 10px; width: 20px; height: 16px;

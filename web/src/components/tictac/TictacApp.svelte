@@ -86,7 +86,8 @@
   const l1Param = router.num('l1');
   let l1 = $state(l1Param !== null && L1_OPTS.includes(l1Param) ? l1Param : 0.001);
   let thr = $state(router.num('thr') ?? SPARSITY_THRESHOLD);
-  let game = $state<number[]>(parseGame(router.get('g') ?? ''));
+  const initialGame = parseGame(router.get('g') ?? '');
+  let game = $state<number[]>(initialGame);
 
   function parseGame(s: string): number[] {
     const moves = s.split('').map(Number);
@@ -140,15 +141,23 @@
     }, 0);
   });
 
-  // ---- current game, replayed at the scrubbed step ------------------------
-  const board = $derived(boardFromMoves(game));
+  // ---- current game, viewed through the turn cursor -----------------------
+  // Two scrubbers, two axes: the TransportBar Player walks TRAINING steps;
+  // `ply` walks the TURNS of the current game. Every panel views the game
+  // through this prefix; playing a move while scrubbed back branches from
+  // the viewed position. Local state (not URL), like the attention focus.
+  let ply = $state(initialGame.length);
+  const viewPly = $derived(Math.min(ply, game.length));
+  const viewMoves = $derived(game.slice(0, viewPly));
+
+  const board = $derived(boardFromMoves(viewMoves));
   const gameOver = $derived(isTerminal(board));
-  const ids = $derived(gameIds(game));
+  const ids = $derived(gameIds(viewMoves));
   const step = $derived(player.index);
 
   const pos = $derived.by<ProbePosition | null>(() => {
     if (gameOver) return null;
-    return { moves: game, board, legal: legalMoves(board), optimal: analyze(board).optimal };
+    return { moves: viewMoves, board, legal: legalMoves(board), optimal: analyze(board).optimal };
   });
 
   const viz = $derived(replay && run ? replay.viz(step, ids) : null);
@@ -183,7 +192,7 @@
     for (const h of heads)
       for (let j = 0; j < T; j++) row[j] += viz.attn.data[(h * T + focusPos) * T + j] / heads.length;
     const mass = new Float64Array(9);
-    for (let j = 1; j < T; j++) mass[game[j - 1]] += row[j];
+    for (let j = 1; j < T; j++) mass[viewMoves[j - 1]] += row[j];
     return { mass, startMass: row[0] };
   });
 
@@ -222,7 +231,9 @@
 
   function play(cell: number) {
     if (gameOver || board[cell] !== 0) return;
-    game = [...game, cell];
+    // Scrubbed back? The new move branches from the viewed position.
+    game = [...viewMoves, cell];
+    ply = game.length;
   }
 
   const metricNow = $derived.by(() => {
@@ -238,7 +249,7 @@
     return (
       `step ${step}/${run.steps.length - 1}` +
       (m ? ` · loss ${m.loss.toFixed(2)}b · agree ${(m.agreement * 100).toFixed(0)}% · equiv ${m.equivariance.toFixed(2)} · sparse ${(m.sparsity * 100).toFixed(0)}%` : '') +
-      ` — ply ${game.length}, ${side}`
+      ` — ply ${viewPly}/${game.length}, ${side}`
     );
   });
 </script>
@@ -296,12 +307,32 @@
   {#snippet pBoard()}
     <div class="pcol">
       <TicBoard {board} pi={pol?.pi ?? null} optimal={pos?.optimal ?? []} {modelPick} onCellClick={gameOver ? undefined : play} />
+      <div class="turnrow">
+        <button class="ghost tbtn" disabled={viewPly === 0} onclick={() => (ply = 0)} title="First ply">⏮</button>
+        <button class="ghost tbtn" disabled={viewPly === 0} onclick={() => (ply = viewPly - 1)} title="Back one turn">◀</button>
+        <input
+          class="turnslider"
+          type="range"
+          min="0"
+          max={game.length}
+          step="1"
+          value={viewPly}
+          disabled={!game.length}
+          oninput={(e) => (ply = Number((e.currentTarget as HTMLInputElement).value))}
+          title="Scrub through the game's turns — every panel follows"
+        />
+        <button class="ghost tbtn" disabled={viewPly >= game.length} onclick={() => (ply = viewPly + 1)} title="Forward one turn">▶</button>
+        <button class="ghost tbtn" disabled={viewPly >= game.length} onclick={() => (ply = game.length)} title="Latest ply">⏭</button>
+        <span class="mono faint plylabel">ply {viewPly}/{game.length}</span>
+      </div>
       <div class="brow">
-        <button class="ghost" disabled={!game.length} onclick={() => (game = game.slice(0, -1))}>⌫ undo</button>
-        <button class="ghost" disabled={!game.length} onclick={() => (game = [])}>reset</button>
+        <button class="ghost" disabled={!game.length} onclick={() => { game = game.slice(0, -1); ply = game.length; }}>⌫ undo</button>
+        <button class="ghost" disabled={!game.length} onclick={() => { game = []; ply = 0; }}>reset</button>
         <button class="ghost" disabled={gameOver || modelPick === null} onclick={() => modelPick !== null && play(modelPick)} title="Play the model's argmax move">▶ model move</button>
       </div>
-      <div class="faint hint">blue fill = model policy · green ring = minimax-optimal · yellow outline = model's pick</div>
+      <div class="faint hint">
+        {#if viewPly < game.length}viewing ply {viewPly} — click a cell to branch from here · {/if}blue fill = model policy · green ring = minimax-optimal · yellow outline = model's pick
+      </div>
     </div>
   {/snippet}
 
@@ -315,7 +346,7 @@
   {/snippet}
 
   {#snippet pPoset()}
-    <OutcomeStrip {game} bits={moveBits} />
+    <OutcomeStrip {game} bits={moveBits} ply={viewPly} onSeek={(k) => (ply = k)} />
   {/snippet}
 
   {#snippet aMetrics()}{#if metricNow}<span class="mono">every 10 steps · suite of {suite.length}</span>{/if}{/snippet}
@@ -405,7 +436,11 @@
 
   .pcol { display: flex; flex-direction: column; gap: 8px; overflow: auto; min-height: 0; flex: 1 1 auto; }
   .brow { display: flex; gap: 6px; }
-  .hint { font-size: 10.5px; line-height: 1.4; }
+  .turnrow { display: flex; align-items: center; gap: 4px; max-width: 300px; }
+  .tbtn { padding: 2px 7px; font-size: 11px; }
+  .turnslider { flex: 1 1 auto; min-width: 60px; }
+  .plylabel { font-size: 10.5px; white-space: nowrap; }
+  .hint { font-size: 10.5px; line-height: 1.4; max-width: 320px; overflow-wrap: break-word; }
 
   .hbtn {
     font-size: 10px; padding: 1px 6px; margin-left: 2px;
