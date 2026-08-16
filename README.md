@@ -89,7 +89,7 @@ come for free.
 | `web/src/lib/player.svelte.ts` | playback: an index into the immutable trace |
 | `web/src/components/` | shared transport + cost/candidate panels, plus per-lens views |
 | `engine/lens.py` | the real-model logit lens + J-lens (plain `transformers`) |
-| `engine/main.py` | the FastAPI service (`/health`, `/lens`, `/column`, SSE `/chat`, `/attn`, `/hopfield`, `/ablate`, SSE `/train`) |
+| `engine/main.py` | the FastAPI service (`/health`, `/lens`, `/next`, `/column`, SSE `/chat`, `/attn`, `/hopfield`, `/ablate`, SSE `/train`) |
 | `tui/src/` | the OpenTUI front-end (talks to the engine over HTTP) |
 | `tui/src/spectate.ts` | read-only sidecar in the TUI: `/state` + `/screen` on :5182 |
 | `mcp/server.ts` | MCP bridge — lets Claude Code spectate the TUI + query the engine |

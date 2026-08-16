@@ -391,6 +391,25 @@ export async function fetchHopfield(req: {
   return res.json();
 }
 
+export interface NextResponse {
+  model: string;
+  n_tokens: number;
+  top: TopTok[];
+}
+
+/** The next-token top-k at the end of a prompt — the lean sibling of /lens
+ * for callers that need one distribution, not the grid (~75× faster). */
+export async function fetchNext(req: {
+  model: string;
+  prompt: string;
+  top_k?: number;
+  chat?: boolean;
+  thinking?: boolean;
+}): Promise<NextResponse> {
+  const res = await post('/next', { top_k: 20, ...req });
+  return res.json();
+}
+
 export async function fetchColumn(req: {
   model: string;
   prompt: string;

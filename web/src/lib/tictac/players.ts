@@ -10,7 +10,7 @@
  * "decisiveness" — how much of the model's next-token belief was on-task.
  */
 
-import { fetchLens, type TopTok } from '../logit/api';
+import { fetchNext, type TopTok } from '../logit/api';
 import { randInt, type Rng } from '../llm/rng';
 import { analyze, boardFromMoves, boardKey, legalMoves, toMove, type Board } from './game';
 import type { Arch, Signal, TicRun } from './ticTrain';
@@ -157,17 +157,14 @@ export function llmPlayer(model: string, mode: 'chat' | 'raw'): TicPlayer {
   let ending: '' | ' ' | null = null;
 
   const query = async (moves: number[], end: '' | ' ') => {
-    const r = await fetchLens({
+    const r = await fetchNext({
       model,
       prompt: movePrompt(moves, mode === 'chat') + (mode === 'raw' ? end : ''),
       top_k: 20,
-      jlens: false,
-      rollout: 0,
       chat: mode === 'chat',
       thinking: false
     });
-    const finalLayer = r.grid[r.grid.length - 1];
-    return parseDigitProbs(finalLayer[finalLayer.length - 1]);
+    return parseDigitProbs(r.top);
   };
 
   return {

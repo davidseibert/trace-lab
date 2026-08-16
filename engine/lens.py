@@ -485,6 +485,24 @@ def ablate_report(model, tok, ids: list[int], pos: int, mask_start: int, mask_en
     }
 
 
+@torch.no_grad()
+def next_report(model, tok, text: str, top_k: int = 20) -> dict:
+    """The next-token distribution at the end of a prompt — top-k only, no
+    grid, no ladder. One forward pass; the lens machinery is skipped
+    entirely. Exists because /lens spends ~99% of its wall time on the full
+    layers×positions grid (measured 7.5 s vs 0.1 s for the same forward on
+    Qwen3-0.6B): callers that want ONE distribution — Tic·arena's LLM
+    players, any constrained-choice read — should not pay for a grid they
+    never look at.
+    """
+    input_ids = tok(text, return_tensors="pt").input_ids
+    _preflight(model, input_ids, 0)
+    device = next(model.parameters()).device
+    out = model(input_ids=input_ids.to(device))
+    probs = out.logits[0, -1].float().softmax(-1)
+    return {"n_tokens": int(input_ids.shape[1]), "top": _topk(probs, tok, top_k)}
+
+
 # Regime thresholds — MUST match the toy lens's exported constants in
 # web/src/lib/hopfield/hopfield.ts (RETRIEVAL_EFFK / GLOBAL_EFFK_FRAC), so the
 # toy and the instrument speak one vocabulary.

@@ -426,9 +426,14 @@ mover's policy overlaid on the board, bits paid per move, "open in Tic·tac"),
 and a **report card**: the probe suite pointed at any player — agreement,
 bits vs optimal, D₄ equivariance, illegal mass, decisiveness.
 
-**LLM players are read, not sampled**: one `/lens` forward per unique
-position, parsing the next-token distribution over the nine digit tokens
-(zero engine changes; positions memoized). The prompt ending is
+**LLM players are read, not sampled**: one `/next` forward per unique
+position (~50 ms), parsing the next-token distribution over the nine digit
+tokens (positions memoized). `/next` is the lean sibling of `/lens` added
+for exactly this: the full lens grid spends ~99% of its wall time on
+layers×positions×vocab accounting a single-distribution caller never reads
+(measured 7.5 s vs 48 ms on Qwen3-0.6B — a 155× difference on the same
+forward). KV caching, notably, is NOT the lever: each move is one forward
+pass, no decode loop, so there is nothing for a KV cache to reuse. The prompt ending is
 tokenizer-dependent — GPT-2-style BPEs fuse `" 4"` into one token (no
 trailing space), Qwen/Gemma emit the space separately (trailing space) — so
 each player self-calibrates on its first call (measured: Qwen3 raw goes 0% →

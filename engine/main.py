@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from lens import (ablate_report, attn_report, column_report, hopfield_report, lens_report, load_model,
+from lens import (ablate_report, attn_report, column_report, hopfield_report, lens_report, load_model, next_report,
                   pick_device, reason_events, render_chat)
 
 # The Qwen3-0.6B pair mirrors Raschka's *Build a Reasoning Model from Scratch*
@@ -382,6 +382,23 @@ def attn(req: AttnRequest):
     return {"model": req.model,
             **attn_report(model, req.ids, req.pos,
                           pick_layer=req.layer, pick_head=req.head)}
+
+
+class NextRequest(BaseModel):
+    model: str = "Qwen/Qwen3-0.6B"
+    prompt: str = Field(min_length=1, max_length=8000)
+    top_k: int = Field(default=20, ge=1, le=50)
+    chat: bool = False
+    thinking: bool = True
+
+
+@app.post("/next")
+def next_token(req: NextRequest):
+    """The next-token top-k at the end of a prompt — the lean sibling of
+    /lens for callers that need one distribution, not the grid (~75× faster
+    on the same forward)."""
+    model, tok, _device = _get(req.model)
+    return {"model": req.model, **next_report(model, tok, _render(tok, req), top_k=req.top_k)}
 
 
 class HopfieldRequest(BaseModel):

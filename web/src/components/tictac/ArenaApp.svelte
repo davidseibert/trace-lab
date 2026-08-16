@@ -328,7 +328,7 @@
           onclick={() => addToRoster(`llm:${llmModel}:${llmMode === 'auto' ? defaultLlmMode(llmModel) : llmMode}`)}
         >+ add</button>
       </div>
-      <div class="faint hint">LLM moves are read as next-token distributions over the digit tokens — one /lens forward per position, memoized.</div>
+      <div class="faint hint">LLM moves are read as next-token distributions over the digit tokens — one /next forward per position (~50 ms), memoized.</div>
     </div>
   </div>
 {/snippet}
