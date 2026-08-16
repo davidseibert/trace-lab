@@ -30,6 +30,12 @@ x-common:
       - action: sync+restart
         path: engine
         target: /app
+        # Explicit, not just .dockerignore: a bare-metal `uv run uvicorn` on the
+        # host writes Windows-flavored .pyc files into engine/__pycache__, and a
+        # watch that sees them restarts the container for nothing (compose's
+        # honoring of .dockerignore in watch has been version-inconsistent).
+        ignore:
+          - __pycache__/
   # So `make tui` waits for uvicorn to be listening instead of racing it -- a
   # TUI that starts a second early just shows "engine offline".
   engine-health: &engine-health
