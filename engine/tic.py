@@ -65,6 +65,14 @@ def board_key(b: Board) -> int:
     return k
 
 
+def board_from_key(k: int) -> Board:
+    out = []
+    for _ in range(9):
+        out.append(k % 3)
+        k //= 3
+    return tuple(out)
+
+
 def to_move(b: Board) -> int:
     """Whose turn: X (1) when mark counts are equal."""
     x = sum(1 for c in b if c == 1)

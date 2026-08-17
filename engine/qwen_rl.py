@@ -51,9 +51,9 @@ from typing import Iterator
 import torch
 import torch.nn.functional as F
 
-from tic import (EQUIV_SUB, TRANSFORMS, ProbePosition, analyze, board_from_moves, board_key,
-                 build_block_suite, build_probe_suite, generate_game, is_terminal, legal_moves,
-                 move_prompt, transform_moves)
+from tic import (EQUIV_SUB, TRANSFORMS, ProbePosition, analyze, board_from_key, board_from_moves,
+                 board_key, build_block_suite, build_probe_suite, generate_game, is_terminal,
+                 legal_moves, move_prompt, transform_moves)
 
 OUT = Path(os.environ.get("LENS_LOCAL_DIR", "data/local"))
 BITS = 1 / math.log(2)
@@ -82,6 +82,13 @@ class RlConfig:
     # 'moves' is the toy GPT's move-sequence encoding; 'both' adds the history
     # line under the board — the encoding arm of INSIGHTS §5.
     encoding: str = "board"
+    # Path to a frozen reward-model table (web/scripts/export-teacher.ts).
+    # Empty = the solver verifier. Set = the mapped-Goodhart arm (INSIGHTS
+    # §5.9): reward is the TOY'S raw probability on Qwen's move — no longer
+    # verifiable reward but RLHF, with a reward model whose every defect is
+    # enumerable against the solver before training starts. Off-task tokens
+    # score 0 (the reward model cannot price them).
+    teacher: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -157,9 +164,14 @@ def argmax_legal(pi: list[float], legal: tuple[int, ...]) -> int:
     return arg
 
 
-def report_card(policy_cells, suite: list[ProbePosition], blocks: list[ProbePosition]) -> dict:
+def report_card(policy_cells, suite: list[ProbePosition], blocks: list[ProbePosition],
+                teacher: dict[int, list[float]] | None = None) -> dict:
     """policy_cells: list of positions -> per-position ([9] digit-cell mass).
-    Batches all unique boards in one pass; memoized by board key."""
+    Batches all unique boards in one pass; memoized by board key. With a
+    teacher table, adds the Goodhart readouts: agreement with the TEACHER's
+    argmax, and agreement with the SOLVER restricted to the suite positions
+    where the teacher is wrong — the mapped cliff. The prediction is that the
+    first rises while the second falls."""
     sub = suite[:EQUIV_SUB]
     wanted: dict[int, ProbePosition] = {}
     for p in [*suite, *blocks, *(transformed(p, g) for p in sub for g in range(1, 8))]:
@@ -169,12 +181,15 @@ def report_card(policy_cells, suite: list[ProbePosition], blocks: list[ProbePosi
     at = {board_key(p.board): m for p, m in zip(order, masses)}
 
     agree = bits = illegal = decisive = 0.0
+    arg_at: dict[int, int] = {}
     for p in suite:
         mass = at[board_key(p.board)]
         pi, ill = legal_policy(mass, p.legal)
         illegal += ill
         decisive += sum(mass)
-        if argmax_legal(pi, p.legal) in p.optimal:
+        arg = argmax_legal(pi, p.legal)
+        arg_at[board_key(p.board)] = arg
+        if arg in p.optimal:
             agree += 1
         opt_mass = sum(pi[m] for m in p.optimal)
         bits += min(10.0, -math.log2(max(opt_mass, 2**-10)))
@@ -194,7 +209,7 @@ def report_card(policy_cells, suite: list[ProbePosition], blocks: list[ProbePosi
         if argmax_legal(pi, p.legal) == p.optimal[0]:
             blocked += 1
 
-    return {
+    card = {
         "agreement": agree / len(suite),
         "bitsVsOptimal": bits / len(suite),
         "equivariance": equiv / (len(sub) * 7),
@@ -202,6 +217,21 @@ def report_card(policy_cells, suite: list[ProbePosition], blocks: list[ProbePosi
         "decisiveness": decisive / len(suite),
         "blocks": blocked / len(blocks) if blocks else 0.0,
     }
+    if teacher is not None:
+        t_agree = on_wrong = n_wrong = 0
+        for p in suite:
+            t_pi, _ = legal_policy(teacher[board_key(p.board)], p.legal)
+            t_arg = argmax_legal(t_pi, p.legal)
+            if arg_at[board_key(p.board)] == t_arg:
+                t_agree += 1
+            if t_arg not in p.optimal:
+                n_wrong += 1
+                if arg_at[board_key(p.board)] in p.optimal:
+                    on_wrong += 1
+        card["agreeTeacher"] = t_agree / len(suite)
+        card["agreeSolverOnTeacherWrong"] = on_wrong / n_wrong if n_wrong else 1.0
+        card["teacherWrongInSuite"] = n_wrong
+    return card
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +299,27 @@ def train_run(cfg: RlConfig, out: Path = OUT) -> Iterator[dict]:
 
     suite = build_probe_suite(cfg.suite_seed)
     blocks = build_block_suite(cfg.suite_seed)
+
+    # The mapped-Goodhart teacher: freeze it, card it, and enumerate its
+    # entire error surface against the solver BEFORE training starts.
+    teacher: dict[int, list[float]] | None = None
+    teacher_info: dict = {}
+    if cfg.teacher:
+        table = json.loads(Path(cfg.teacher).read_text(encoding="utf-8"))
+        teacher = {int(k): v for k, v in table["policies"].items()}
+        wrong = 0
+        for k, q in teacher.items():
+            b = board_from_key(k)
+            legal = tuple(legal_moves(b))
+            t_pi, _ = legal_policy(q, legal)
+            if argmax_legal(t_pi, legal) not in analyze(b).optimal:
+                wrong += 1
+        teacher_info = {
+            "teacher_meta": table["meta"],
+            "teacher_wrong_positions": wrong,          # of len(teacher) reachable
+            "teacher_card": report_card(
+                lambda ps: [teacher[board_key(p.board)] for p in ps], suite, blocks),
+        }
     metrics_path = out / "tic-rl-metrics.jsonl"
     out.mkdir(parents=True, exist_ok=True)
     log = metrics_path.open("w", encoding="utf-8")
@@ -309,10 +360,10 @@ def train_run(cfg: RlConfig, out: Path = OUT) -> Iterator[dict]:
     n_params = sum(p.numel() for p in trainable)
     yield emit({"event": "start", **asdict(cfg), "device": device,
                 "trainable_params": n_params, "digit_tokens": len(dmap),
-                "ending": repr(ending)})
+                "ending": repr(ending), **teacher_info})
 
     model.eval()  # no dropout anywhere; grads still flow where we ask
-    yield emit({"event": "eval", "step": 0, **report_card(policy_cells, suite, blocks)})
+    yield emit({"event": "eval", "step": 0, **report_card(policy_cells, suite, blocks, teacher)})
 
     rnd = random.Random(cfg.seed)
     for step in range(1, cfg.steps + 1):
@@ -332,14 +383,19 @@ def train_run(cfg: RlConfig, out: Path = OUT) -> Iterator[dict]:
         off_task = illegal = 0
         for i, (b, moves) in enumerate(zip(boards, positions)):
             optimal = set(analyze(b).optimal)
+            q = teacher[board_key(b)] if teacher is not None else None
             for j in range(cfg.group):
                 cell = dmap.get(int(actions[i, j]))
                 if cell is None:
-                    rewards[i, j] = -1.0
                     off_task += 1
                 elif b[cell] != 0:
-                    rewards[i, j] = -1.0
                     illegal += 1
+                if q is not None:
+                    # RLHF-faithful: the reward model prices every cell it can
+                    # see, occupied ones included — its defects are the point.
+                    rewards[i, j] = 0.0 if cell is None else q[cell]
+                elif cell is None or b[cell] != 0:
+                    rewards[i, j] = -1.0
                 else:
                     rewards[i, j] = 1.0 if cell in optimal else 0.0
 
@@ -362,16 +418,17 @@ def train_run(cfg: RlConfig, out: Path = OUT) -> Iterator[dict]:
                     "entropy_bits": round(float(entropy.detach()) * BITS, 5)})
 
         if step % cfg.eval_every == 0 or step == cfg.steps:
-            yield emit({"event": "eval", "step": step, **report_card(policy_cells, suite, blocks)})
+            yield emit({"event": "eval", "step": step,
+                        **report_card(policy_cells, suite, blocks, teacher)})
         if step == cfg.steps // 2:
             # A checkpoint is a convenience; its I/O failure must not cost the run.
             try:
-                path = save_merged("tic-rl-mid", f"solver-RLVR, step {step}/{cfg.steps}")
+                path = save_merged("tic-rl-mid", f"{'teacher' if teacher else 'solver'}-RLVR, step {step}/{cfg.steps}")
                 yield emit({"event": "checkpoint", "name": "tic-rl-mid", "path": str(path)})
             except Exception as e:
                 yield emit({"event": "checkpoint_error", "name": "tic-rl-mid", "detail": str(e)})
 
-    path = save_merged("tic-rl-final", f"solver-RLVR, {cfg.steps} steps, beta={cfg.beta}")
+    path = save_merged("tic-rl-final", f"{'teacher' if teacher else 'solver'}-RLVR, {cfg.steps} steps, beta={cfg.beta}")
     yield emit({"event": "checkpoint", "name": "tic-rl-final", "path": str(path)})
     yield emit({"event": "done", "steps": cfg.steps})
     log.close()
@@ -396,7 +453,8 @@ def main() -> None:
                   f"off-task {ev['off_task']:.1%}  illegal {ev['illegal']:.1%}  KL {ev['kl_bits']:.3f}b  "
                   f"H {ev['entropy_bits']:.3f}b")
         elif kind == "eval":
-            print(f"eval @ {ev['step']:4d}  " + "  ".join(f"{c} {ev[c]:.3f}" for c in EVAL_COLS))
+            cols = EVAL_COLS + (["agreeTeacher", "agreeSolverOnTeacherWrong"] if "agreeTeacher" in ev else [])
+            print(f"eval @ {ev['step']:4d}  " + "  ".join(f"{c} {ev[c]:.3f}" for c in cols))
         elif kind == "checkpoint":
             print(f"saved {ev['path']}")
         elif kind == "done":
