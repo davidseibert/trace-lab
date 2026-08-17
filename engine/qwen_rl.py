@@ -65,6 +65,12 @@ class RlConfig:
     group: int = 8              # GRPO group: samples per position
     lr: float = 1e-4
     beta: float = 0.02          # KL(pi || base) coefficient, in nats
+    # Entropy bonus, exact over the vocab. The baseline run (entropy 0) froze
+    # at step ~150: the policy went deterministic, every group's G samples
+    # came back identical, and the group-relative advantage was 0 everywhere —
+    # GRPO's exploration self-terminates at the bandit level. The bonus keeps
+    # pi(runner-up) alive so sampling can still surface counterevidence.
+    entropy_coef: float = 0.02
     seed: int = 0
     suite_seed: int = 0         # probe/block suite seed — match the arena UI's
     eval_every: int = 25
@@ -322,7 +328,8 @@ def train_run(cfg: RlConfig, out: Path = OUT) -> Iterator[dict]:
         advantage = rewards - rewards.mean(dim=1, keepdim=True)
         pg = -(advantage * logp.gather(1, actions)).mean()
         kl = (probs * (logp - ref_logp)).sum(-1).mean()  # exact, in nats
-        loss = pg + cfg.beta * kl
+        entropy = -(probs * logp).sum(-1).mean()         # exact, in nats
+        loss = pg + cfg.beta * kl - cfg.entropy_coef * entropy
 
         optimizer.zero_grad()
         loss.backward()
@@ -333,7 +340,8 @@ def train_run(cfg: RlConfig, out: Path = OUT) -> Iterator[dict]:
         yield emit({"event": "step", "step": step, "loss": round(float(loss.detach()), 5),
                     "reward": round(float(rewards.mean()), 4),
                     "off_task": round(off_task / n, 4), "illegal": round(illegal / n, 4),
-                    "kl_bits": round(float(kl.detach()) * BITS, 5)})
+                    "kl_bits": round(float(kl.detach()) * BITS, 5),
+                    "entropy_bits": round(float(entropy.detach()) * BITS, 5)})
 
         if step % cfg.eval_every == 0 or step == cfg.steps:
             yield emit({"event": "eval", "step": step, **report_card(policy_cells, suite, blocks)})
@@ -363,7 +371,8 @@ def main() -> None:
                   f"{ev['digit_tokens']} digit tokens, ending={ev['ending']}")
         elif kind == "step" and ev["step"] % 10 == 0:
             print(f"step {ev['step']:4d}  loss {ev['loss']:+.4f}  reward {ev['reward']:+.3f}  "
-                  f"off-task {ev['off_task']:.1%}  illegal {ev['illegal']:.1%}  KL {ev['kl_bits']:.3f}b")
+                  f"off-task {ev['off_task']:.1%}  illegal {ev['illegal']:.1%}  KL {ev['kl_bits']:.3f}b  "
+                  f"H {ev['entropy_bits']:.3f}b")
         elif kind == "eval":
             print(f"eval @ {ev['step']:4d}  " + "  ".join(f"{c} {ev[c]:.3f}" for c in EVAL_COLS))
         elif kind == "checkpoint":
