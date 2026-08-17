@@ -76,6 +76,10 @@ class RlConfig:
     eval_every: int = 25
     lora_r: int = 16
     lora_alpha: int = 32
+    # Prompt serialization (tic.Encoding): 'board' is the arena's exact text;
+    # 'moves' is the toy GPT's move-sequence encoding; 'both' adds the history
+    # line under the board — the encoding arm of INSIGHTS §5.
+    encoding: str = "board"
 
 
 # ---------------------------------------------------------------------------
@@ -100,12 +104,12 @@ def digit_token_map(tok) -> dict[int, int]:
     return out
 
 
-def calibrate_ending(policy_probs, digit_ids) -> str:
+def calibrate_ending(policy_probs, digit_ids, encoding: str = "board") -> str:
     """Port of llmPlayer's self-calibration: Qwen/Gemma tokenize the trailing
     space separately (want ' '), GPT-2-style BPEs fuse ' 4' (want '').
     Measured on the empty-board prompt against the BASE policy."""
     def decisiveness(ending: str) -> float:
-        probs = policy_probs([move_prompt([]) + ending])
+        probs = policy_probs([move_prompt([], encoding=encoding) + ending])
         return float(probs[0, digit_ids].sum())
 
     bare = decisiveness("")
@@ -248,8 +252,8 @@ def train_run(cfg: RlConfig, out: Path = OUT) -> Iterator[dict]:
         logits = model(**enc).logits[:, -1]
         return F.softmax(logits.float(), dim=-1)
 
-    ending = calibrate_ending(probs_of, digit_ids)
-    prompt_of = lambda moves: move_prompt(list(moves)) + ending
+    ending = calibrate_ending(probs_of, digit_ids, cfg.encoding)
+    prompt_of = lambda moves: move_prompt(list(moves), encoding=cfg.encoding) + ending
 
     def policy_cells(positions: list[ProbePosition]) -> list[list[float]]:
         masses: list[list[float]] = []
@@ -280,8 +284,9 @@ def train_run(cfg: RlConfig, out: Path = OUT) -> Iterator[dict]:
         merged.to(torch.bfloat16).save_pretrained(path, safe_serialization=True)
         tok.save_pretrained(path)
         (path / "lens_meta.json").write_text(json.dumps({
-            "note": note, "family": "tic",
-            "prompts": [move_prompt([]), move_prompt([4, 0, 8])],
+            "note": note, "family": "tic", "encoding": cfg.encoding,
+            "prompts": [move_prompt([], encoding=cfg.encoding),
+                        move_prompt([4, 0, 8], encoding=cfg.encoding)],
         }, indent=2))
         del merged
         if device == "cuda":

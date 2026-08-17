@@ -224,11 +224,18 @@ def build_block_suite(seed: int, n: int = 24) -> list[ProbePosition]:
 
 
 # ---------------------------------------------------------------------------
-# The arena prompt — port of players.ts movePrompt (raw mode), verbatim, so a
-# checkpoint trained here reads the exact text the Tic·arena report card uses.
+# The arena prompt — encoding='board' is a verbatim port of players.ts
+# movePrompt (raw mode), so a checkpoint trained here reads the exact text the
+# Tic·arena report card uses. The other encodings are the arm INSIGHTS §5
+# calls for: 'moves' serializes the game as a move sequence (the toy GPT's
+# encoding — occupancy must be inferred, but the opponent's threat is the
+# newest token), 'both' adds the history line under the board (explicit
+# occupancy AND the recency cue).
 # ---------------------------------------------------------------------------
 
 CELL_LEGEND = "0 1 2\n3 4 5\n6 7 8"
+
+Encoding = Literal["board", "moves", "both"]
 
 
 def render_board_text(b: Board) -> str:
@@ -238,12 +245,24 @@ def render_board_text(b: Board) -> str:
     )
 
 
-def move_prompt(moves: list[int], chat: bool = False) -> str:
+def render_moves_text(moves: list[int]) -> str:
+    if not moves:
+        return "No moves yet."
+    played = ", ".join(f"{'X' if i % 2 == 0 else 'O'} {m}" for i, m in enumerate(moves))
+    return f"Moves so far (X moves first, players alternate): {played}."
+
+
+def move_prompt(moves: list[int], chat: bool = False, encoding: Encoding = "board") -> str:
     b = board_from_moves(moves)
     mover = "X" if to_move(b) == 1 else "O"
+    state = {
+        "board": f"Current board (X, O, . = empty):\n{render_board_text(b)}",
+        "moves": render_moves_text(moves),
+        "both": f"Current board (X, O, . = empty):\n{render_board_text(b)}\n{render_moves_text(moves)}",
+    }[encoding]
     base = (
         f"Tic-tac-toe. Cells are numbered 0-8, left to right, top to bottom:\n{CELL_LEGEND}\n"
-        f"Current board (X, O, . = empty):\n{render_board_text(b)}\n"
+        f"{state}\n"
         f"It is {mover}'s turn."
     )
     if chat:
