@@ -243,10 +243,12 @@ change every step instead of staying fixed. Nothing else differs.
 And the total it costs is exactly the master equation's data term:
 
 ```
-codeword length  ≈  Σᵢ −log₂ P(xᵢ | x<ᵢ)  =  L(D | M)  =  the model's cross-entropy loss (in bits)
+codeword length  ≈  Σᵢ −log₂ P(xᵢ | x<ᵢ)  =  L(D | M)
+mean cross-entropy (bits/token) = L(D | M) / number of priced tokens
 ```
 
-All three are the *same number*. So an LLM does not "have a codeword" on its own — a
+The summed token loss and ideal data code are the same number; mean loss differs
+by the priced-token count. So an LLM does not "have a codeword" on its own — a
 codeword is for a **(model + one specific sequence)** pair: the LLM is the shared
 codebook both encoder and decoder hold, and arithmetic coding turns it plus a
 sequence into literal bits. Training the LLM to lower its loss is, exactly, training

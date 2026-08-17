@@ -13,7 +13,7 @@ export const uniformBits = (n: number): number => (n <= 1 ? 0 : log2(n));
  * Shannon information content of an event with probability p: -log2(p) bits.
  * This is the optimal code length for a symbol that occurs with frequency p.
  */
-export const surprisal = (p: number): number => (p <= 0 ? 0 : -log2(p));
+export const surprisal = (p: number): number => (p <= 0 ? Infinity : p === 1 ? 0 : -log2(p));
 
 /**
  * Shannon entropy (bits/symbol) of a frequency map — the theoretical floor on

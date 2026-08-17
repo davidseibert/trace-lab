@@ -18,6 +18,7 @@
   import LensView from './llm/LensView.svelte';
   import ImplantPanel from './llm/ImplantPanel.svelte';
   import { PanelManager } from '../lib/panels/panels.svelte';
+  import MathLink from './math/MathLink.svelte';
 
   const panels = new PanelManager(
     'llm',
@@ -232,6 +233,7 @@
   <button class="ghost" title="Re-initialise weights with a new random seed" onclick={() => (seed += 1)}>🎲 seed {seed}</button>
 
   <span class="endspacer"></span>
+  <MathLink lesson="cross-entropy" label="derive the loss" />
 </TopBar>
 
 {#if activeViz}

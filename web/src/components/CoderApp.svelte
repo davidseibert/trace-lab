@@ -25,6 +25,7 @@
   import DistView from './coder/DistView.svelte';
   import BitstreamView from './coder/BitstreamView.svelte';
   import BitsChart from './coder/BitsChart.svelte';
+  import MathLink from './math/MathLink.svelte';
 
   const panels = new PanelManager(
     'coder',
@@ -209,6 +210,7 @@
   {#if !roundTripOk}
     <span class="warn bad mono">round-trip mismatch</span>
   {/if}
+  <MathLink lesson="codes" />
 </TopBar>
 
 {#if cur}

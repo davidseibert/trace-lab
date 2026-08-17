@@ -19,9 +19,14 @@
         <b style="color:var(--total)">min</b>
         <b style="color:var(--model)">L(M)</b> + <b style="color:var(--data)">L(D|M)</b>
       </span>
-      — the model that predicts best is the model that compresses best. Every lens below turns some
-      corner of that sentence into a falling bits curve you can scrub.
+      — under one probability model, prediction cost and ideal compression cost are the same
+      <span class="mono">−log₂p</span>. Every lens below turns some corner of that statement into a falling bits curve you can scrub.
     </p>
+    <a class="math-card panel" href="#/math">
+      <span class="mono sigma">∑</span>
+      <span><b>Math·foundations</b><small>Why bits? Derive surprisal, entropy, code lengths, and cross-entropy from ordinary counting.</small></span>
+      <span class="arrow">→</span>
+    </a>
   </div>
 
   {#each KIND_ORDER as k (k)}
@@ -59,9 +64,15 @@
     padding: 14px 4px 24px;
   }
 
-  .hero { padding: 4px 8px 0; max-width: 760px; }
+  .hero { padding: 4px 8px 0; max-width: 860px; display: flex; flex-direction: column; gap: 12px; }
   .thesis { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--muted); }
   .formula { font-size: 13px; }
+  .math-card { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: center; padding: 10px 12px; color: var(--text); text-decoration: none; border-left: 3px solid var(--total); }
+  .math-card:hover { border-color: var(--model); background: var(--panel-2); }
+  .sigma { color: var(--total); font-size: 23px; }
+  .math-card b { display: block; font-size: 12.5px; }
+  .math-card small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .math-card .arrow { color: var(--model); }
 
   .tier { display: flex; flex-direction: column; gap: 10px; }
   .tier-head { display: flex; align-items: baseline; gap: 12px; padding: 0 8px; flex-wrap: wrap; }

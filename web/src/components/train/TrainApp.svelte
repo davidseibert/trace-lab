@@ -18,6 +18,7 @@
   import EngineOffline from '../shell/EngineOffline.svelte';
   import EngineStatus from '../shell/EngineStatus.svelte';
   import TrainChart from './TrainChart.svelte';
+  import MathLink from '../math/MathLink.svelte';
 
   const panels = new PanelManager(
     'train',
@@ -131,6 +132,7 @@
 
   <span class="spacer"></span>
 
+  <MathLink lesson="cross-entropy" label="derive the loss" />
   <EngineStatus />
 </TopBar>
 

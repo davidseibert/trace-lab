@@ -10,6 +10,7 @@
 
 <header class="nav panel">
   <a class="wordmark mono" href="#/" title="index — all lenses">trace<span class="dim">·lab</span></a>
+  <a class="math mono" class:active={router.path === 'math'} href="#/math" title="Derive the mathematics behind every readout">∑ Math</a>
 
   {#each KIND_ORDER as k (k)}
     <div class="group" title={KINDS[k].tagline}>
@@ -43,6 +44,12 @@
     text-decoration: none;
   }
   .wordmark .dim { color: var(--faint); font-weight: 500; }
+  .math {
+    color: var(--model); text-decoration: none; white-space: nowrap;
+    border: 1px solid var(--border-2); border-radius: var(--r-sm);
+    padding: 3px 8px; font-size: 11px;
+  }
+  .math:hover, .math.active { border-color: var(--model); background: rgba(91, 156, 255, 0.12); }
 
   .group { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .glabel {

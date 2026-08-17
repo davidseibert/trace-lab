@@ -7,13 +7,19 @@ the model that predicts best is the model that compresses best.
 > **total = L(M) + L(D | M)** — the best model of your data is the one that lets
 > you describe the model *and* the data-given-the-model in the fewest total bits.
 > Too simple makes `L(D|M)` huge; too complex makes `L(M)` huge. MDL finds the
-> trough — and never overfits, because complexity literally costs bits.
+> trough under the chosen code: added complexity must repay its own bit cost.
 
 Every lens turns some corner of that idea into a **falling bits curve** you can
 scrub: a RePair grammar, morphology, a SUBDUE graph, an arithmetic coder, a
 mini-GPT you can train and do fact-surgery on, and the **logit lens** over real
 GPT-2 / Qwen — the same `−log₂ p` axis under all of them. *Prediction is
 compression;* the lenses are that sentence, made tangible.
+
+The web app also has **Math·foundations** (`#/math`): a linked teaching path
+from binary choices through surprisal, entropy, arithmetic coding, and
+cross-entropy. Its live exercises reuse the same probability and coder
+implementations as the exhibits, so the derivation and the instrument cannot
+quietly disagree.
 
 ## Two front-ends, one engine
 

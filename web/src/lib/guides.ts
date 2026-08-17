@@ -35,7 +35,7 @@ const SECTIONS: GuideSection[] = [
       },
       {
         ok: false,
-        text: 'Rising L(M) is not waste and falling L(D|M) is not the goal — read only the total. The evolution chart’s trough is where the next loan stops paying, which is exactly where MDL stops overfitting.'
+        text: 'Rising L(M) is not waste and falling L(D|M) is not the goal — read only the total. The evolution chart’s trough is where the next loan stops paying under this code; that complexity charge is how MDL resists overfitting.'
       },
       {
         ok: false,
@@ -121,7 +121,7 @@ const SECTIONS: GuideSection[] = [
     items: [
       {
         ok: true,
-        text: 'Scrubbing replays a finished training run against fixed weights snapshots — it is deterministic and free. The probe’s target probability rising IS the description length of the dataset falling.'
+        text: 'Scrubbing replays a finished training run against fixed weight snapshots — it is deterministic and free. The probe target’s probability rising means that target’s code is shortening; the loss curve aggregates the priced tokens across the evaluation sample.'
       },
       {
         ok: true,

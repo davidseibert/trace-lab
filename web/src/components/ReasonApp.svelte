@@ -25,6 +25,7 @@
   import DepthChart from './logit/DepthChart.svelte';
   import TraceView from './reason/TraceView.svelte';
   import TokenBitsStrip from './reason/TokenBitsStrip.svelte';
+  import MathLink from './math/MathLink.svelte';
 
   const panels = new PanelManager(
     'reason',
@@ -367,6 +368,7 @@
     </button>
   {/if}
 
+  <MathLink lesson="surprisal" label="derive −log₂p" />
   <EngineStatus />
 </TopBar>
 

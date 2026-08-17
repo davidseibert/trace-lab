@@ -25,6 +25,7 @@
   import ArenaApp from './components/tictac/ArenaApp.svelte';
   import HopfieldRealApp from './components/hopfield/HopfieldRealApp.svelte';
   import TrainApp from './components/train/TrainApp.svelte';
+  import MathApp from './components/math/MathApp.svelte';
 
   const COMPONENTS: Record<string, Component> = {
     grammar: GrammarApp,
@@ -40,12 +41,13 @@
     coder: CoderApp,
     logit: LogitApp,
     reason: ReasonApp,
-    train: TrainApp
+    train: TrainApp,
+    math: MathApp
   };
 
   // Unknown paths fall through to the index rather than a 404 — this is a
   // sandbox, not a site.
-  const Active = $derived(lensById(router.path) ? COMPONENTS[router.path] : null);
+  const Active = $derived(lensById(router.path) || router.path === 'math' ? COMPONENTS[router.path] : null);
 </script>
 
 <div class="app">
