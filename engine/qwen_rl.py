@@ -42,6 +42,8 @@ import json
 import math
 import os
 import random
+import shutil
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterator
@@ -281,7 +283,18 @@ def train_run(cfg: RlConfig, out: Path = OUT) -> Iterator[dict]:
         # on the live adapters. ~2.4 GB fp32 held twice, briefly; fits.
         merged = copy.deepcopy(model).merge_and_unload()
         path = out / name
-        merged.to(torch.bfloat16).save_pretrained(path, safe_serialization=True)
+        # Windows: a leftover model.safetensors from a previous run can be
+        # transiently locked (AV scan, indexer) and safetensors dies on
+        # os error 5 — clear the target and retry once.
+        for attempt in (1, 2):
+            try:
+                shutil.rmtree(path, ignore_errors=True)
+                merged.to(torch.bfloat16).save_pretrained(path, safe_serialization=True)
+                break
+            except Exception:
+                if attempt == 2:
+                    raise
+                time.sleep(5)
         tok.save_pretrained(path)
         (path / "lens_meta.json").write_text(json.dumps({
             "note": note, "family": "tic", "encoding": cfg.encoding,
@@ -351,8 +364,12 @@ def train_run(cfg: RlConfig, out: Path = OUT) -> Iterator[dict]:
         if step % cfg.eval_every == 0 or step == cfg.steps:
             yield emit({"event": "eval", "step": step, **report_card(policy_cells, suite, blocks)})
         if step == cfg.steps // 2:
-            path = save_merged("tic-rl-mid", f"solver-RLVR, step {step}/{cfg.steps}")
-            yield emit({"event": "checkpoint", "name": "tic-rl-mid", "path": str(path)})
+            # A checkpoint is a convenience; its I/O failure must not cost the run.
+            try:
+                path = save_merged("tic-rl-mid", f"solver-RLVR, step {step}/{cfg.steps}")
+                yield emit({"event": "checkpoint", "name": "tic-rl-mid", "path": str(path)})
+            except Exception as e:
+                yield emit({"event": "checkpoint_error", "name": "tic-rl-mid", "detail": str(e)})
 
     path = save_merged("tic-rl-final", f"solver-RLVR, {cfg.steps} steps, beta={cfg.beta}")
     yield emit({"event": "checkpoint", "name": "tic-rl-final", "path": str(path)})
