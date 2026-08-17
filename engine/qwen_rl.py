@@ -215,10 +215,15 @@ def train_run(cfg: RlConfig, out: Path = OUT) -> Iterator[dict]:
         tok.pad_token = tok.eos_token
     tok.padding_side = "left"  # last position = the move token for every row
 
-    # fp32 on purpose: 0.6B fits a 12 GB card at full precision with room to
-    # spare, exact logits make the KL/eval numbers clean, and it sidesteps
-    # bf16 Adam-state precision entirely. Checkpoints are saved back in bf16.
-    model = AutoModelForCausalLM.from_pretrained(cfg.model, torch_dtype=torch.float32).to(device)
+    # bf16 base weights — the dtype the engine itself serves these models at
+    # (so the step-0 report card matches the arena's numbers), and half the
+    # VRAM of fp32 on a 12 GB laptop card that also runs the desktop (an fp32
+    # run died at step ~40 to a transient CUBLAS failure). Precision lives
+    # where it matters: peft keeps the LoRA adapters + Adam state in fp32
+    # (autocast_adapter_dtype default), and every logit is cast .float()
+    # before log_softmax, so the loss/KL/eval arithmetic is fp32 throughout.
+    dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    model = AutoModelForCausalLM.from_pretrained(cfg.model, torch_dtype=dtype).to(device)
     model = get_peft_model(model, LoraConfig(
         r=cfg.lora_r, lora_alpha=cfg.lora_alpha, lora_dropout=0.0, task_type="CAUSAL_LM",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
